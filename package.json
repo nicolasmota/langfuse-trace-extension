@@ -27,6 +27,7 @@
   ],
   "activationEvents": [
     "onCommand:langfuse.openTrace",
+    "onCommand:langfuse.openTraceById",
     "onCommand:langfuse.autoRefreshIfOpen"
   ],
   "main": "./out/extension.js",
@@ -34,7 +35,12 @@
     "commands": [
       {
         "command": "langfuse.openTrace",
-        "title": "Langfuse: Open Trace Panel",
+        "title": "Open Trace Panel",
+        "category": "Langfuse"
+      },
+      {
+        "command": "langfuse.openTraceById",
+        "title": "Open Trace by Session ID…",
         "category": "Langfuse"
       }
     ],
@@ -62,12 +68,15 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "20.x",
     "@types/vscode": "^1.96.2",
-    "@vscode/vsce": "^3.3.2",
-    "typescript": "^5.9.3"
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
   }
 }

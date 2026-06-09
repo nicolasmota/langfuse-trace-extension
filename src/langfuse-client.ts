@@ -61,24 +61,6 @@ const DEFAULT_HOST = 'http://127.0.0.1:3000';
 const DEFAULT_PUBLIC_KEY = 'pk-lf-local-dev';
 const DEFAULT_SECRET_KEY = 'sk-lf-local-dev';
 
-/**
- * Extracts the `stream_id` from a Langfuse trace metadata field.
- * The Python OTel SDK serialises the entire metadata dict as a JSON string,
- * so the field may arrive as either a string or a pre-parsed object depending
- * on Langfuse version. Both forms are handled.
- */
-export function extractStreamId(metadata: LangfuseTrace['metadata']): string | undefined {
-  if (!metadata) { return undefined; }
-  try {
-    const obj: Record<string, unknown> = typeof metadata === 'string'
-      ? JSON.parse(metadata) as Record<string, unknown>
-      : metadata;
-    return typeof obj['stream_id'] === 'string' ? obj['stream_id'] : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Returns default Langfuse configuration for local development. */
 export function defaultLangfuseConfig(): LangfuseConfig {
   return {
@@ -100,18 +82,12 @@ export class LangfuseClient {
   }
 
   /**
-   * Fetches traces associated with a chat stream.
-   *
-   * The Langfuse `sessionId` is a backend-generated UUID that differs from the
-   * extension's `streamId`. The `streamId` is stored inside the trace
-   * `metadata` JSON string as `stream_id` (set by agentic-chatbot-service via
-   * OTel baggage). There is no server-side metadata filter in the REST API, so
-   * we fetch the most recent traces and filter client-side.
+   * Fetches traces associated with a Langfuse session using the native
+   * `sessionId` query parameter supported by the REST API.
    */
-  async fetchSessionTraces(streamId: string, scanLimit = 50): Promise<LangfuseTrace[]> {
-    const data = await this._get(`/api/public/traces?limit=${scanLimit}&page=1`);
-    const allTraces = (data?.data ?? []) as LangfuseTrace[];
-    return allTraces.filter(trace => extractStreamId(trace.metadata) === streamId);
+  async fetchSessionTraces(sessionId: string): Promise<LangfuseTrace[]> {
+    const data = await this._get(`/api/public/traces?sessionId=${encodeURIComponent(sessionId)}`);
+    return (data?.data ?? []) as LangfuseTrace[];
   }
 
   /**

@@ -13,12 +13,12 @@ export function readLangfuseConfig(): LangfuseConfig {
 }
 
 /**
- * Fetches full traces and their flattened observations for a given stream.
- * Returns null when no traces are found (stream not yet traced or not flushed).
+ * Fetches full traces and their flattened observations for a given Langfuse session.
+ * Returns null when no traces are found (session not yet traced or not flushed).
  */
-export async function loadTracesAndObservations(streamId: string) {
+export async function loadTracesAndObservations(sessionId: string) {
   const client = new LangfuseClient(readLangfuseConfig());
-  const traces = await client.fetchSessionTraces(streamId);
+  const traces = await client.fetchSessionTraces(sessionId);
   if (traces.length === 0) { return null; }
   const fullTraces = await Promise.all(traces.map(t => client.fetchFullTrace(t.id)));
   return { fullTraces, observations: fullTraces.flatMap(t => t.observations ?? []) };

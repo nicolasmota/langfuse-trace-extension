@@ -6,18 +6,18 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       'langfuse.openTrace',
-      async ({ streamId, traceIndex }: { streamId: string; traceIndex?: number }) => {
+      async ({ sessionId, traceIndex }: { sessionId: string; traceIndex?: number }) => {
         const { host: langfuseHost } = readLangfuseConfig();
         const refreshFn = async (): Promise<void> => {
-          const result = await loadTracesAndObservations(streamId);
+          const result = await loadTracesAndObservations(sessionId);
           if (!result) { return; }
-          TraceViewerPanel.updateIfOpen(streamId, result.fullTraces, result.observations);
+          TraceViewerPanel.updateIfOpen(sessionId, result.fullTraces, result.observations);
         };
         try {
-          const result = await loadTracesAndObservations(streamId);
+          const result = await loadTracesAndObservations(sessionId);
           if (!result) {
             vscode.window.showInformationMessage(
-              `No Langfuse traces found for stream ${streamId.slice(0, 8)}…. ` +
+              `No Langfuse traces found for session ${sessionId.slice(0, 8)}…. ` +
               'Ensure local Langfuse is running, the service sent at least one reply, and a few seconds have passed for the trace to flush.',
             );
             return;
@@ -28,8 +28,8 @@ export function activate(context: vscode.ExtensionContext): void {
           const focusIdx = typeof traceIndex === 'number'
             ? (result.fullTraces.length - 1 - traceIndex)
             : 0;
-          TraceViewerPanel.createOrShow(streamId, result.fullTraces, result.observations, context, refreshFn, langfuseHost);
-          TraceViewerPanel.focusAt(streamId, Math.max(0, focusIdx));
+          TraceViewerPanel.createOrShow(sessionId, result.fullTraces, result.observations, context, refreshFn, langfuseHost);
+          TraceViewerPanel.focusAt(sessionId, Math.max(0, focusIdx));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           vscode.window.showErrorMessage(`Could not fetch Langfuse trace: ${message}`);
@@ -37,16 +37,29 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     ),
     vscode.commands.registerCommand(
+      'langfuse.openTraceById',
+      async () => {
+        const sessionId = await vscode.window.showInputBox({
+          title: 'Open Langfuse Trace',
+          prompt: 'Enter the Langfuse session ID',
+          placeHolder: 'e.g. my-session-abc123',
+          ignoreFocusOut: true,
+        });
+        if (!sessionId?.trim()) { return; }
+        await vscode.commands.executeCommand('langfuse.openTrace', { sessionId: sessionId.trim() });
+      },
+    ),
+    vscode.commands.registerCommand(
       'langfuse.autoRefreshIfOpen',
-      ({ streamId }: { streamId: string }) => {
-        if (!TraceViewerPanel.isOpen(streamId)) { return; }
+      ({ sessionId }: { sessionId: string }) => {
+        if (!TraceViewerPanel.isOpen(sessionId)) { return; }
         setTimeout(() => {
-          if (!TraceViewerPanel.isOpen(streamId)) { return; }
-          loadTracesAndObservations(streamId).then(result => {
-            if (!result || !TraceViewerPanel.isOpen(streamId)) { return; }
-            TraceViewerPanel.updateIfOpen(streamId, result.fullTraces, result.observations);
+          if (!TraceViewerPanel.isOpen(sessionId)) { return; }
+          loadTracesAndObservations(sessionId).then(result => {
+            if (!result || !TraceViewerPanel.isOpen(sessionId)) { return; }
+            TraceViewerPanel.updateIfOpen(sessionId, result.fullTraces, result.observations);
           }).catch(err => {
-            console.warn(`[langfuse-traces] auto-refresh failed for ${streamId}: ${err instanceof Error ? err.message : String(err)}`);
+            console.warn(`[langfuse-traces] auto-refresh failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
           });
         }, 3500);
       },

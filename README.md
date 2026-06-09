@@ -34,23 +34,23 @@ Other VS Code extensions can open the trace panel by calling the commands this e
 ```typescript
 // Open the trace viewer for a Langfuse session
 await vscode.commands.executeCommand('langfuse.openTrace', {
-  streamId: '<your-session-or-stream-id>',
+  sessionId: '<your-langfuse-session-id>',
   traceIndex: 2, // optional — scroll to the Nth trace (0-based, oldest first)
 });
 
 // Trigger a background auto-refresh (no-op if panel is not open)
 vscode.commands.executeCommand('langfuse.autoRefreshIfOpen', {
-  streamId: '<your-session-or-stream-id>',
+  sessionId: '<your-langfuse-session-id>',
 });
 ```
 
-`streamId` must match the value stored as `stream_id` inside the Langfuse trace metadata (set via OTel baggage or the Python SDK).
+`sessionId` must match the native Langfuse `sessionId` field set on your traces (via the Python/JS SDK or OTel `session.id` attribute).
 
 ## How it works
 
-1. Your backend instruments LLM calls with the Langfuse SDK and stores the session identifier in trace metadata as `stream_id`
+1. Your backend instruments LLM calls with the Langfuse SDK and sets a `sessionId` on each trace
 2. A host extension calls `langfuse.openTrace` with that identifier
-3. This extension fetches the matching traces from the Langfuse REST API and renders them in a webview panel beside the chat
+3. This extension queries the Langfuse REST API using `?sessionId=...` and renders the matching traces in a webview panel beside the chat
 
 No data leaves your machine — the extension talks directly to your Langfuse instance.
 
