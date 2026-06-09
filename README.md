@@ -2,6 +2,12 @@
 
 Inspect LLM traces, spans, token usage and costs from [Langfuse](https://langfuse.com) directly inside VS Code — without switching tabs.
 
+## Screenshots
+
+![Trace panel with waterfall view](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-waterfall.png)
+
+![Formatted input/output view](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-formatted.png)
+
 ## Features
 
 - **Inline trace panel** — opens beside your active editor, scoped to a single session
@@ -11,6 +17,7 @@ Inspect LLM traces, spans, token usage and costs from [Langfuse](https://langfus
 - **Auto-refresh** — panel updates automatically when a new LLM response arrives (when triggered by a host extension)
 - **Direct link to Langfuse UI** — one-click to open any trace in the full Langfuse web app
 - **Works with local and cloud Langfuse** — configure any host URL
+- **Open by Session ID** — use `Langfuse: Open Trace by Session ID…` from the Command Palette to inspect any session manually
 
 ## Requirements
 
