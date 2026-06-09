@@ -6,8 +6,6 @@ Inspect LLM traces, spans, token usage and costs from [Langfuse](https://langfus
 
 ![Trace panel with waterfall view](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-waterfall.png)
 
-![Formatted input/output view](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-formatted.png)
-
 ## Features
 
 - **Inline trace panel** — opens beside your active editor, scoped to a single session
