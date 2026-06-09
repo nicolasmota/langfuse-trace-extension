@@ -1,0 +1,7 @@
+src/**
+tsconfig.json
+node_modules/@types/**
+node_modules/typescript/**
+node_modules/@vscode/vsce/**
+node_modules/.bin/**
+node_modules/.cache/**

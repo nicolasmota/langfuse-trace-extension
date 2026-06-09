@@ -1,0 +1,73 @@
+{
+  "name": "langfuse-traces",
+  "publisher": "YOUR_PUBLISHER",
+  "displayName": "Langfuse Traces",
+  "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_GITHUB_USER/vscode-langfuse-traces.git"
+  },
+  "homepage": "https://github.com/YOUR_GITHUB_USER/vscode-langfuse-traces",
+  "bugs": {
+    "url": "https://github.com/YOUR_GITHUB_USER/vscode-langfuse-traces/issues"
+  },
+  "engines": {
+    "vscode": "^1.96.2"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "langfuse",
+    "llm",
+    "observability",
+    "tracing",
+    "ai"
+  ],
+  "activationEvents": [
+    "onCommand:langfuse.openTrace",
+    "onCommand:langfuse.autoRefreshIfOpen"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "langfuse.openTrace",
+        "title": "Langfuse: Open Trace Panel",
+        "category": "Langfuse"
+      }
+    ],
+    "configuration": {
+      "title": "Langfuse Traces",
+      "properties": {
+        "langfuse.host": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "description": "Base URL of the Langfuse instance (cloud or self-hosted). Uses 127.0.0.1 for local Docker to avoid IPv6 resolution issues."
+        },
+        "langfuse.publicKey": {
+          "type": "string",
+          "default": "pk-lf-local-dev",
+          "description": "Langfuse public key for API authentication."
+        },
+        "langfuse.secretKey": {
+          "type": "string",
+          "default": "sk-lf-local-dev",
+          "description": "Langfuse secret key for API authentication."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "20.x",
+    "@types/vscode": "^1.96.2",
+    "@vscode/vsce": "^3.3.2",
+    "typescript": "^5.9.3"
+  }
+}
