@@ -161,7 +161,7 @@ export class LangfuseClient {
         res.on('end', () => {
           const body = Buffer.concat(chunks).toString('utf8');
           if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`Langfuse API error ${res.statusCode}: ${body}`));
+            reject(new Error(`Langfuse API error ${res.statusCode}: ${body.slice(0, 300)}`));
             return;
           }
           try {

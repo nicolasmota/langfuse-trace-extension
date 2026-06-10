@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { randomBytes } from 'node:crypto';
 import type { LangfuseObservation, LangfuseTrace } from './langfuse-client.js';
 import {
   type TraceSummary,
@@ -80,7 +81,14 @@ export class TraceViewerPanel {
         void this._panel.webview.postMessage({ command: 'refreshDone' });
       }
       if (msg.command === 'openExternal' && msg.url) {
-        void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        try {
+          const parsed = new URL(msg.url);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+          }
+        } catch {
+          // Invalid URL — ignore silently.
+        }
       }
       if (msg.command === 'exportSpan' && msg.traceId && msg.observationId) {
         try {
@@ -267,7 +275,8 @@ function escHtml(s: unknown): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 
@@ -413,6 +422,7 @@ function renderFieldWithToggle(value: unknown, fieldId: string): string {
 }
 
 function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: LangfuseObservation[], langfuseHost = ''): string {
+  const nonce = randomBytes(16).toString('base64');
   const sortedTraces = sortTracesNewestFirst(traces);
   const summaries = buildTraceSummaries(sortedTraces, observations);
   const sessionStart = summaries.length ? Math.min(...summaries.map(s => s.minStart)) : 0;
@@ -537,7 +547,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   html, body {
@@ -1054,7 +1064,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     : traceSectionsHtml}
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     var vscode = acquireVsCodeApi();
     var lastInteractedObservationId = null;
     var lastInteractedTraceId = null;

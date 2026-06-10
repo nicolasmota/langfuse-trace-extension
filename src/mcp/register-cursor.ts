@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { readLangfuseConfig } from '../langfuse-service.js';
+import { readLangfuseConfigAsync } from '../langfuse-service.js';
 import { MCP_READ_SERVER_NAME } from './read-server.js';
 
 /** Registers the Langfuse read MCP server with Cursor via a stdio subprocess. */
@@ -11,31 +11,36 @@ export function registerCursorMcp(context: vscode.ExtensionContext): boolean {
     return false;
   }
 
-  const config = readLangfuseConfig();
   const scriptPath = path.join(context.extensionPath, 'out', 'mcp', 'stdio-main.js');
-  const env: Record<string, string> = {
-    ELECTRON_RUN_AS_NODE: '1',
-    LANGFUSE_HOST: config.host,
-    LANGFUSE_PUBLIC_KEY: config.publicKey,
-    LANGFUSE_SECRET_KEY: config.secretKey,
-  };
 
-  try {
-    cursorApi.unregisterServer(MCP_READ_SERVER_NAME);
-  } catch {
-    // First registration — nothing to unregister.
-  }
+  void readLangfuseConfigAsync(context.secrets).then(config => {
+    const env: Record<string, string> = {
+      ELECTRON_RUN_AS_NODE: '1',
+      LANGFUSE_HOST: config.host,
+      LANGFUSE_PUBLIC_KEY: config.publicKey,
+      LANGFUSE_SECRET_KEY: config.secretKey,
+    };
 
-  cursorApi.registerServer({
-    name: MCP_READ_SERVER_NAME,
-    server: {
-      command: process.execPath,
-      args: [scriptPath],
-      env,
-    },
+    try {
+      cursorApi.unregisterServer(MCP_READ_SERVER_NAME);
+    } catch {
+      // First registration — nothing to unregister.
+    }
+
+    cursorApi.registerServer({
+      name: MCP_READ_SERVER_NAME,
+      server: {
+        command: process.execPath,
+        args: [scriptPath],
+        env,
+      },
+    });
+
+    console.info('[langfuse-traces] Registered stdio MCP server with Cursor:', MCP_READ_SERVER_NAME);
+  }).catch(err => {
+    console.error('[langfuse-traces] Failed to read config for MCP registration:', err);
   });
 
-  console.info('[langfuse-traces] Registered stdio MCP server with Cursor:', MCP_READ_SERVER_NAME);
   return true;
 }
 

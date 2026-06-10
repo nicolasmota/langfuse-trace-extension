@@ -21,11 +21,19 @@ function isInitializeRequest(body: unknown): boolean {
   return (body as { method?: string }).method === 'initialize';
 }
 
+const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024; // 4 MB
+
 /** Reads and parses a JSON request body from an HTTP request. */
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buf.byteLength;
+    if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+      throw new Error('Request body too large');
+    }
+    chunks.push(buf);
   }
   if (chunks.length === 0) { return undefined; }
   const text = Buffer.concat(chunks).toString('utf8');
@@ -103,11 +111,28 @@ export class LangfuseMcpHost {
     return this._url;
   }
 
+  private _isOriginAllowed(req: IncomingMessage): boolean {
+    const origin = req.headers['origin'];
+    if (!origin) { return true; }
+    try {
+      const parsed = new URL(origin);
+      return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
+    } catch {
+      return false;
+    }
+  }
+
   private async _handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = req.url?.split('?')[0];
     if (pathname !== PANEL_MCP_PATH) {
       res.statusCode = 404;
       res.end('Not found');
+      return;
+    }
+
+    if (!this._isOriginAllowed(req)) {
+      res.statusCode = 403;
+      res.end('Forbidden');
       return;
     }
 
@@ -158,7 +183,7 @@ export class LangfuseMcpHost {
     if (!sessionKey && isInitializeRequest(body)) {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
-        enableDnsRebindingProtection: false,
+        enableDnsRebindingProtection: true,
         onsessioninitialized: (id) => {
           this._transports.set(id, transport);
         },

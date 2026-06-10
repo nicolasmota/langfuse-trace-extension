@@ -1,5 +1,11 @@
 src/**
 tsconfig.json
+Makefile
+**/*.vsix
+.vscode/**
+.github/**
+.claude/**
+.dev-host-workspace/**
 node_modules/@types/**
 node_modules/typescript/**
 node_modules/@vscode/vsce/**

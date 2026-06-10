@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import { TraceViewerPanel } from './trace-panel';
-import { readLangfuseConfig, loadTracesAndObservations } from './langfuse-service';
+import {
+  readLangfuseConfigAsync,
+  loadTracesAndObservations,
+  SECRET_KEY_STORAGE_ID,
+} from './langfuse-service';
 import { LangfuseMcpHost } from './mcp/http-host';
 import { createPanelActions } from './mcp/panel-tools';
 import { registerCursorMcp, unregisterCursorMcp } from './mcp/register-cursor';
@@ -90,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (activeSessionId && TraceViewerPanel.isOpen(activeSessionId)) {
             TraceViewerPanel.reveal(activeSessionId);
             const refreshFn = async (): Promise<void> => {
-              const result = await loadTracesAndObservations(activeSessionId);
+              const result = await loadTracesAndObservations(activeSessionId, context.secrets);
               if (!result) { return; }
               TraceViewerPanel.updateIfOpen(activeSessionId, result.fullTraces, result.observations);
             };
@@ -101,9 +105,9 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         if (!sessionId) { return; }
 
-        const { host: langfuseHost } = readLangfuseConfig();
+        const { host: langfuseHost } = await readLangfuseConfigAsync(context.secrets);
         const refreshFn = async (): Promise<void> => {
-          const result = await loadTracesAndObservations(sessionId);
+          const result = await loadTracesAndObservations(sessionId, context.secrets);
           if (!result) { return; }
           TraceViewerPanel.updateIfOpen(sessionId, result.fullTraces, result.observations);
         };
@@ -115,7 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          const result = await loadTracesAndObservations(sessionId);
+          const result = await loadTracesAndObservations(sessionId, context.secrets);
           if (!result) {
             vscode.window.showInformationMessage(
               `No Langfuse traces found for session ${sessionId.slice(0, 8)}…. ` +
@@ -175,13 +179,31 @@ export function activate(context: vscode.ExtensionContext): void {
           : 'Cursor MCP API not available. Ensure you are running in Cursor with the extension activated.',
       );
     }),
+    vscode.commands.registerCommand('langfuse.setSecretKey', async () => {
+      const input = await vscode.window.showInputBox({
+        title: 'Set Langfuse Secret Key',
+        prompt: 'Enter your Langfuse secret key (stored securely via VS Code SecretStorage)',
+        placeHolder: 'sk-lf-…',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (input === undefined) { return; }
+      if (input.trim() === '') {
+        await context.secrets.delete(SECRET_KEY_STORAGE_ID);
+        void vscode.window.showInformationMessage('Langfuse secret key cleared from SecretStorage.');
+      } else {
+        await context.secrets.store(SECRET_KEY_STORAGE_ID, input.trim());
+        void vscode.window.showInformationMessage('Langfuse secret key saved to SecretStorage.');
+      }
+      registerCursorMcp(context);
+    }),
     vscode.commands.registerCommand(
       'langfuse.autoRefreshIfOpen',
       ({ sessionId }: { sessionId: string }) => {
         if (!TraceViewerPanel.isOpen(sessionId)) { return; }
         setTimeout(() => {
           if (!TraceViewerPanel.isOpen(sessionId)) { return; }
-          loadTracesAndObservations(sessionId).then(result => {
+          loadTracesAndObservations(sessionId, context.secrets).then(result => {
             if (!result || !TraceViewerPanel.isOpen(sessionId)) { return; }
             TraceViewerPanel.updateIfOpen(sessionId, result.fullTraces, result.observations);
           }).catch(err => {
