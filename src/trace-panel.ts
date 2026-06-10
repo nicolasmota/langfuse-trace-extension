@@ -9,6 +9,7 @@ import {
   observationTypeColor,
   computeDepths,
   buildTraceSummaries,
+  sortTracesNewestFirst,
 } from './trace-utils.js';
 import type { PanelUiState } from './panel-state.js';
 import { performExportContext } from './export-service.js';
@@ -412,12 +413,7 @@ function renderFieldWithToggle(value: unknown, fieldId: string): string {
 }
 
 function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: LangfuseObservation[], langfuseHost = ''): string {
-  // Sort newest-first so the most recent message appears at the top (panel index 0).
-  const sortedTraces = [...traces].sort((a, b) => {
-    const ta = a.timestamp ? new Date(a.timestamp as string).getTime() : 0;
-    const tb = b.timestamp ? new Date(b.timestamp as string).getTime() : 0;
-    return tb - ta;
-  });
+  const sortedTraces = sortTracesNewestFirst(traces);
   const summaries = buildTraceSummaries(sortedTraces, observations);
   const sessionStart = summaries.length ? Math.min(...summaries.map(s => s.minStart)) : 0;
   const sessionEnd = summaries.length ? Math.max(...summaries.map(s => s.maxEnd)) : 0;

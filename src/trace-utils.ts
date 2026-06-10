@@ -105,6 +105,21 @@ export function computeDepths(obs: LangfuseObservation[]): Map<string, number> {
   return depths;
 }
 
+/** Sorts traces newest-first, matching the trace viewer panel display order. */
+export function sortTracesNewestFirst(traces: LangfuseTrace[]): LangfuseTrace[] {
+  return [...traces].sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp as string).getTime() : 0;
+    const tb = b.timestamp ? new Date(b.timestamp as string).getTime() : 0;
+    return tb - ta;
+  });
+}
+
+/** Returns the panel index for a trace ID after newest-first sorting. */
+export function focusIndexForTraceId(traces: LangfuseTrace[], traceId: string): number {
+  const idx = sortTracesNewestFirst(traces).findIndex(t => t.id === traceId);
+  return idx >= 0 ? idx : 0;
+}
+
 /** Builds a TraceSummary for each trace, aggregating timing and token usage. */
 export function buildTraceSummaries(traces: LangfuseTrace[], observations: LangfuseObservation[]): TraceSummary[] {
   return traces.map(trace => {

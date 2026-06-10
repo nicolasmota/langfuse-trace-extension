@@ -9,6 +9,7 @@ import {
   computeDepths,
   computeTraceTokens,
   buildTraceSummaries,
+  focusIndexForTraceId,
 } from '../trace-utils.js';
 
 function makeObs(overrides: Partial<LangfuseObservation> = {}): LangfuseObservation {
@@ -229,6 +230,17 @@ describe('computeTraceTokens', () => {
 
   it('returns zeros when no observations and no trace usage', () => {
     expect(computeTraceTokens(makeTrace(), [])).toEqual({ input: 0, output: 0 });
+  });
+});
+
+describe('focusIndexForTraceId', () => {
+  it('returns the newest-first index for the matching trace', () => {
+    const traces = [
+      makeTrace({ id: 'old', timestamp: '2024-01-01T00:00:00.000Z' }),
+      makeTrace({ id: 'new', timestamp: '2024-01-01T00:00:02.000Z' }),
+    ];
+    expect(focusIndexForTraceId(traces, 'new')).toBe(0);
+    expect(focusIndexForTraceId(traces, 'old')).toBe(1);
   });
 });
 
