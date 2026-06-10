@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { TraceViewerPanel } from './trace-panel';
-import { readLangfuseConfig, loadByTraceId, loadTracesAndObservations } from './langfuse-service';
-import { focusIndexForTraceId } from './trace-utils';
+import { readLangfuseConfig, loadTracesAndObservations } from './langfuse-service';
 import { LangfuseMcpHost } from './mcp/http-host';
 import { createPanelActions } from './mcp/panel-tools';
 import { registerCursorMcp, unregisterCursorMcp } from './mcp/register-cursor';
@@ -45,16 +44,6 @@ export function activate(context: vscode.ExtensionContext): void {
     return sessionId?.trim() || undefined;
   };
 
-  const promptForTraceId = async (title: string): Promise<string | undefined> => {
-    const traceId = await vscode.window.showInputBox({
-      title,
-      prompt: 'Enter the Langfuse trace ID (from the Langfuse UI URL)',
-      placeHolder: 'e.g. copy from …/trace/abc-123',
-      ignoreFocusOut: true,
-    });
-    return traceId?.trim() || undefined;
-  };
-
   context.subscriptions.push(
     vscode.commands.registerCommand('langfuse.sessions.refresh', () => {
       sessionsProvider.refresh();
@@ -92,12 +81,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand(
       'langfuse.openTrace',
-      async (args?: { sessionId?: string; traceId?: string; traceIndex?: number }) => {
+      async (args?: { sessionId?: string; traceIndex?: number }) => {
         let sessionId = args?.sessionId?.trim();
-        let traceId = args?.traceId?.trim();
         const traceIndex = args?.traceIndex;
 
-        if (!sessionId && !traceId) {
+        if (!sessionId) {
           const activeSessionId = TraceViewerPanel.getActiveSessionId();
           if (activeSessionId && TraceViewerPanel.isOpen(activeSessionId)) {
             TraceViewerPanel.reveal(activeSessionId);
@@ -109,64 +97,28 @@ export function activate(context: vscode.ExtensionContext): void {
             void refreshFn();
             return;
           }
-          traceId = await promptForTraceId('Open Langfuse Trace Panel');
+          sessionId = await promptForSessionId('Open Langfuse Trace Panel');
         }
-        if (!sessionId && !traceId) { return; }
+        if (!sessionId) { return; }
 
         const { host: langfuseHost } = readLangfuseConfig();
+        const refreshFn = async (): Promise<void> => {
+          const result = await loadTracesAndObservations(sessionId);
+          if (!result) { return; }
+          TraceViewerPanel.updateIfOpen(sessionId, result.fullTraces, result.observations);
+        };
         try {
-          if (traceId) {
-            const loaded = await loadByTraceId(traceId);
-            if (!loaded) {
-              vscode.window.showInformationMessage(
-                `No Langfuse trace found for ID ${traceId.slice(0, 8)}…. ` +
-                'Check the trace ID from the Langfuse UI and that the trace has flushed.',
-              );
-              return;
-            }
-
-            const { panelKey, sessionId: loadedSessionId, fullTraces, observations } = loaded;
-            const refreshFn = async (): Promise<void> => {
-              const refreshed = await loadByTraceId(traceId);
-              if (!refreshed) { return; }
-              TraceViewerPanel.updateIfOpen(panelKey, refreshed.fullTraces, refreshed.observations);
-            };
-            const focusIdx = typeof traceIndex === 'number'
-              ? (fullTraces.length - 1 - traceIndex)
-              : focusIndexForTraceId(fullTraces, traceId);
-
-            if (TraceViewerPanel.isOpen(panelKey) && typeof traceIndex !== 'number') {
-              TraceViewerPanel.reveal(panelKey);
-              void refreshFn();
-              TraceViewerPanel.focusAt(panelKey, Math.max(0, focusIdx));
-              return;
-            }
-
-            if (loadedSessionId) {
-              await rememberSession(context.globalState, loadedSessionId);
-              sessionsProvider.refresh();
-            }
-            TraceViewerPanel.createOrShow(panelKey, fullTraces, observations, context, refreshFn, langfuseHost);
-            TraceViewerPanel.focusAt(panelKey, Math.max(0, focusIdx));
-            return;
-          }
-
-          const refreshFn = async (): Promise<void> => {
-            const result = await loadTracesAndObservations(sessionId!);
-            if (!result) { return; }
-            TraceViewerPanel.updateIfOpen(sessionId!, result.fullTraces, result.observations);
-          };
-          const alreadyOpen = TraceViewerPanel.isOpen(sessionId!);
+          const alreadyOpen = TraceViewerPanel.isOpen(sessionId);
           if (alreadyOpen && typeof traceIndex !== 'number') {
-            TraceViewerPanel.reveal(sessionId!);
+            TraceViewerPanel.reveal(sessionId);
             void refreshFn();
             return;
           }
 
-          const result = await loadTracesAndObservations(sessionId!);
+          const result = await loadTracesAndObservations(sessionId);
           if (!result) {
             vscode.window.showInformationMessage(
-              `No Langfuse traces found for session ${sessionId!.slice(0, 8)}…. ` +
+              `No Langfuse traces found for session ${sessionId.slice(0, 8)}…. ` +
               'Ensure local Langfuse is running, the service sent at least one reply, and a few seconds have passed for the trace to flush.',
             );
             return;
@@ -174,10 +126,10 @@ export function activate(context: vscode.ExtensionContext): void {
           const focusIdx = typeof traceIndex === 'number'
             ? (result.fullTraces.length - 1 - traceIndex)
             : 0;
-          await rememberSession(context.globalState, sessionId!);
+          await rememberSession(context.globalState, sessionId);
           sessionsProvider.refresh();
-          TraceViewerPanel.createOrShow(sessionId!, result.fullTraces, result.observations, context, refreshFn, langfuseHost);
-          TraceViewerPanel.focusAt(sessionId!, Math.max(0, focusIdx));
+          TraceViewerPanel.createOrShow(sessionId, result.fullTraces, result.observations, context, refreshFn, langfuseHost);
+          TraceViewerPanel.focusAt(sessionId, Math.max(0, focusIdx));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           vscode.window.showErrorMessage(`Could not fetch Langfuse trace: ${message}`);

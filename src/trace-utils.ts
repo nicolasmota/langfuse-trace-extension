@@ -114,12 +114,6 @@ export function sortTracesNewestFirst(traces: LangfuseTrace[]): LangfuseTrace[] 
   });
 }
 
-/** Returns the panel index for a trace ID after newest-first sorting. */
-export function focusIndexForTraceId(traces: LangfuseTrace[], traceId: string): number {
-  const idx = sortTracesNewestFirst(traces).findIndex(t => t.id === traceId);
-  return idx >= 0 ? idx : 0;
-}
-
 /** Builds a TraceSummary for each trace, aggregating timing and token usage. */
 export function buildTraceSummaries(traces: LangfuseTrace[], observations: LangfuseObservation[]): TraceSummary[] {
   return traces.map(trace => {

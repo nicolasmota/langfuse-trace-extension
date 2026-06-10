@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { LangfuseConfig, buildLangfuseConfig } from './langfuse-client';
-import { loadByTraceIdWithConfig, loadTracesAndObservationsWithConfig } from './trace-loader';
+import { loadTracesAndObservationsWithConfig } from './trace-loader';
 
 const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
 const MAX_RECENT_SESSIONS_LIMIT = 100;
@@ -29,9 +29,4 @@ export function readLangfuseConfig(): LangfuseConfig {
  */
 export async function loadTracesAndObservations(sessionId: string) {
   return loadTracesAndObservationsWithConfig(readLangfuseConfig(), sessionId);
-}
-
-/** Loads a trace by ID, expanding to its session when available. */
-export async function loadByTraceId(traceId: string) {
-  return loadByTraceIdWithConfig(readLangfuseConfig(), traceId);
 }

@@ -58,7 +58,7 @@
     "commands": [
       {
         "command": "langfuse.openTrace",
-        "title": "Open Trace Panel by Trace ID…",
+        "title": "Open Trace Panel",
         "category": "Langfuse"
       },
       {
