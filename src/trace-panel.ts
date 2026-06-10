@@ -10,16 +10,22 @@ import {
   computeDepths,
   buildTraceSummaries,
 } from './trace-utils.js';
+import type { PanelUiState } from './panel-state.js';
+import { performExportContext } from './export-service.js';
 
 /** Manages a single "Langfuse Trace" webview panel per chat session. */
 export class TraceViewerPanel {
   private static readonly _viewType = 'langfuseTrace';
   private static _instances = new Map<string, TraceViewerPanel>();
+  private static _opening = new Set<string>();
+  private static _sharedViewColumn?: vscode.ViewColumn;
+  private static _activeSessionId?: string;
 
   private readonly _panel: vscode.WebviewPanel;
   private readonly _sessionId: string;
   private _refreshFn?: () => Promise<void>;
   private _langfuseHost: string;
+  private _uiState?: PanelUiState;
 
   private constructor(
     sessionId: string,
@@ -31,8 +37,39 @@ export class TraceViewerPanel {
     this._panel = panel;
     this._refreshFn = refreshFn;
     this._langfuseHost = langfuseHost;
-    this._panel.onDidDispose(() => TraceViewerPanel._instances.delete(this._sessionId));
-    this._panel.webview.onDidReceiveMessage(async (msg: { command: string; url?: string }) => {
+    this._panel.onDidDispose(() => {
+      TraceViewerPanel._instances.delete(this._sessionId);
+      if (TraceViewerPanel._instances.size === 0) {
+        TraceViewerPanel._sharedViewColumn = undefined;
+      }
+      if (TraceViewerPanel._activeSessionId === this._sessionId) {
+        const remaining = TraceViewerPanel.getOpenSessionIds();
+        TraceViewerPanel._activeSessionId = remaining.at(-1);
+      }
+    });
+    this._panel.webview.onDidReceiveMessage(async (msg: {
+      command: string;
+      url?: string;
+      focusedTraceIndex?: number | null;
+      focusedTraceId?: string | null;
+      expandedObservationIds?: string[];
+      lastInteractedObservationId?: string | null;
+      lastInteractedTraceId?: string | null;
+      traceId?: string;
+      observationId?: string;
+    }) => {
+      if (msg.command === 'uiState') {
+        this._uiState = {
+          sessionId: this._sessionId,
+          focusedTraceIndex: typeof msg.focusedTraceIndex === 'number' ? msg.focusedTraceIndex : null,
+          focusedTraceId: msg.focusedTraceId ?? null,
+          expandedObservationIds: Array.isArray(msg.expandedObservationIds) ? msg.expandedObservationIds : [],
+          lastInteractedObservationId: msg.lastInteractedObservationId ?? null,
+          lastInteractedTraceId: msg.lastInteractedTraceId ?? null,
+        };
+        TraceViewerPanel._setActiveSession(this._sessionId);
+        return;
+      }
       if (msg.command === 'refresh' && this._refreshFn) {
         try {
           await this._refreshFn();
@@ -43,6 +80,45 @@ export class TraceViewerPanel {
       }
       if (msg.command === 'openExternal' && msg.url) {
         void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+      }
+      if (msg.command === 'exportSpan' && msg.traceId && msg.observationId) {
+        try {
+          await performExportContext({
+            sessionId: this._sessionId,
+            traceId: msg.traceId,
+            observationId: msg.observationId,
+            scope: 'span',
+          });
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Could not export span: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        void this._panel.webview.postMessage({ command: 'exportDone', observationId: msg.observationId });
+      }
+      if (msg.command === 'exportSession') {
+        try {
+          await performExportContext({ sessionId: this._sessionId, scope: 'session' });
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Could not send session to chat: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        void this._panel.webview.postMessage({ command: 'exportDone' });
+      }
+      if (msg.command === 'exportTrace' && msg.traceId) {
+        try {
+          await performExportContext({
+            sessionId: this._sessionId,
+            traceId: msg.traceId,
+            scope: 'trace',
+          });
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Could not send trace to chat: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        void this._panel.webview.postMessage({ command: 'exportDone', traceId: msg.traceId });
       }
     });
   }
@@ -64,30 +140,95 @@ export class TraceViewerPanel {
     if (existing) {
       existing._refreshFn = refreshFn ?? existing._refreshFn;
       if (langfuseHost) { existing._langfuseHost = langfuseHost; }
-      existing._panel.reveal(vscode.ViewColumn.Beside);
+      TraceViewerPanel._revealPanel(existing._panel, sessionId);
       existing._update(traces, observations);
       return;
     }
 
-    const panel = vscode.window.createWebviewPanel(
-      TraceViewerPanel._viewType,
-      `Trace: ${sessionId.slice(0, 8)}…`,
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: context.extensionUri ? [context.extensionUri] : [],
-      },
-    );
+    if (TraceViewerPanel._opening.has(sessionId)) { return; }
+    TraceViewerPanel._opening.add(sessionId);
 
-    const instance = new TraceViewerPanel(sessionId, panel, refreshFn, langfuseHost);
-    TraceViewerPanel._instances.set(sessionId, instance);
-    instance._update(traces, observations);
+    try {
+      const panel = vscode.window.createWebviewPanel(
+        TraceViewerPanel._viewType,
+        `Trace: ${sessionId.slice(0, 8)}…`,
+        { viewColumn: TraceViewerPanel._resolveCreateViewColumn(), preserveFocus: false },
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: context.extensionUri ? [context.extensionUri] : [],
+        },
+      );
+
+      TraceViewerPanel._rememberSharedViewColumn(panel);
+
+      const instance = new TraceViewerPanel(sessionId, panel, refreshFn, langfuseHost);
+      TraceViewerPanel._instances.set(sessionId, instance);
+      TraceViewerPanel._setActiveSession(sessionId);
+      instance._update(traces, observations);
+    } finally {
+      TraceViewerPanel._opening.delete(sessionId);
+    }
+  }
+
+  /** Reveals an already-open trace panel without creating a new editor split. */
+  static reveal(sessionId: string): boolean {
+    const existing = TraceViewerPanel._instances.get(sessionId);
+    if (!existing) { return false; }
+    TraceViewerPanel._revealPanel(existing._panel, sessionId);
+    return true;
   }
 
   /** Returns true if a panel is currently open for the given session. */
   static isOpen(sessionId: string): boolean {
     return TraceViewerPanel._instances.has(sessionId);
+  }
+
+  /** Returns session IDs for all currently open trace viewer panels. */
+  static getOpenSessionIds(): string[] {
+    return [...TraceViewerPanel._instances.keys()];
+  }
+
+  /** Returns the session ID of the most recently revealed trace panel, if any. */
+  static getActiveSessionId(): string | undefined {
+    return TraceViewerPanel._activeSessionId;
+  }
+
+  /** Returns UI state from the active trace viewer panel, if any. */
+  static getActivePanelState(): PanelUiState | undefined {
+    const sessionId = TraceViewerPanel._activeSessionId;
+    if (!sessionId) { return undefined; }
+    return TraceViewerPanel._instances.get(sessionId)?._uiState;
+  }
+
+  private static _setActiveSession(sessionId: string): void {
+    TraceViewerPanel._activeSessionId = sessionId;
+  }
+
+  private static _revealPanel(panel: vscode.WebviewPanel, sessionId: string): void {
+    panel.reveal(panel.viewColumn ?? TraceViewerPanel._sharedViewColumn ?? vscode.ViewColumn.Beside, false);
+    TraceViewerPanel._setActiveSession(sessionId);
+  }
+
+  /** First trace panel splits beside the editor; later ones open as tabs in that group. */
+  private static _resolveCreateViewColumn(): vscode.ViewColumn {
+    if (TraceViewerPanel._sharedViewColumn !== undefined) {
+      return TraceViewerPanel._sharedViewColumn;
+    }
+    for (const instance of TraceViewerPanel._instances.values()) {
+      const column = instance._panel.viewColumn;
+      if (column !== undefined) {
+        return column;
+      }
+    }
+    return vscode.ViewColumn.Beside;
+  }
+
+  private static _rememberSharedViewColumn(panel: vscode.WebviewPanel): void {
+    if (TraceViewerPanel._sharedViewColumn !== undefined) { return; }
+    if (panel.viewColumn !== undefined) {
+      TraceViewerPanel._sharedViewColumn = panel.viewColumn;
+    }
   }
 
   /**
@@ -312,7 +453,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         </div>`;
 
       return `
-        <div class="obs-row" style="--wf-color:${typeColor}" id="${obsId}">
+        <div class="obs-row" style="--wf-color:${typeColor}" id="${obsId}" data-trace-id="${escHtml(trace.id)}" data-observation-id="${escHtml(obs.id)}">
           <div class="obs-header" style="padding-left:${20 + indent}px" data-detail="${detailId}" data-row="${obsId}">
             <span class="obs-type-badge" style="background:color-mix(in srgb,${typeColor} 18%,transparent);color:${typeColor}">${escHtml(obs.type ?? 'SPAN')}</span>
             <span class="obs-name">${escHtml(obs.name ?? obs.id)}</span>
@@ -320,6 +461,9 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
             ${usageInfo}
             <span class="obs-time">${fmtMs(dur)}</span>
             <div class="wf-track">${buildWaterfallBar(obs, minStart, windowMs)}</div>
+            <button class="obs-export-btn" type="button" title="Send span context to chat" data-trace-id="${escHtml(trace.id)}" data-observation-id="${escHtml(obs.id)}">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2" width="7" height="8" rx="0.5"/><path d="M2 4.5H1.5a.5.5 0 0 0-.5.5v6a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5V10"/></svg>
+            </button>
             <span class="obs-toggle-icon${hasDetail ? '' : ' dim'}">▶</span>
           </div>
           ${detailHtml}
@@ -351,7 +495,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       </div>` : '';
 
     return `
-      <div class="trace-section">
+      <div class="trace-section" data-trace-id="${escHtml(trace.id)}" data-trace-index="${ti}">
         <div class="trace-header" data-body="trace-body-${ti}" data-chevron="trace-chevron-${ti}">
           <span class="trace-chevron" id="trace-chevron-${ti}">▼</span>
           <span class="trace-name">${escHtml(trace.name ?? 'agentic_run')}</span>
@@ -360,6 +504,9 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           ${usageStr}
           ${totalCostStr}
           <span class="trace-dur">${fmtMs(totalMs)}</span>
+          <button class="trace-chat-btn" type="button" title="Send trace to chat (via MCP)" data-trace-id="${escHtml(trace.id)}">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h8a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5l-2.5 1.5V4.5a1 1 0 0 1 1-1z"/></svg>
+          </button>
           <button class="trace-ctrl-btn" data-expanded="false" title="Expand all spans in this trace">
             <svg class="icon-expand" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="8,1 11,1 11,4"/><polyline points="4,11 1,11 1,8"/><line x1="7" y1="5" x2="11" y2="1"/><line x1="5" y1="7" x2="1" y2="11"/></svg>
             <svg class="icon-collapse" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="11,4 8,4 8,1"/><polyline points="1,8 4,8 4,11"/><line x1="8" y1="4" x2="11" y2="1"/><line x1="4" y1="8" x2="1" y2="11"/></svg>
@@ -471,6 +618,26 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.07));
     color: var(--vscode-foreground);
   }
+  .trace-chat-btn,
+  #btn-send-session-chat {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.15));
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .trace-chat-btn:hover,
+  #btn-send-session-chat:hover {
+    background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.07));
+    color: var(--vscode-foreground);
+  }
   .trace-ext-link {
     display: inline-flex;
     align-items: center;
@@ -489,6 +656,35 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   .trace-ext-link:hover {
     background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.07));
     color: var(--vscode-foreground);
+  }
+  .obs-export-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.15));
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .obs-row:hover .obs-export-btn,
+  .obs-row.expanded .obs-export-btn,
+  .obs-export-btn.exporting {
+    opacity: 1;
+  }
+  .obs-export-btn:hover {
+    background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.07));
+    color: var(--vscode-foreground);
+  }
+  .obs-export-btn.exporting {
+    pointer-events: none;
+    opacity: 0.5;
   }
 
   /* ── Scrollable content ── */
@@ -844,6 +1040,9 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     <div id="header-top">
       <h1>⎆ Langfuse Trace</h1>
       <span class="session-id" title="Session / stream ID: ${escHtml(sessionId)}">${escHtml(sessionId)}</span>
+      <button id="btn-send-session-chat" type="button" title="Send session to chat (via MCP)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h8a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5l-2.5 1.5V4.5a1 1 0 0 1 1-1z"/></svg>
+      </button>
       <button id="btn-refresh" title="Refresh traces from Langfuse">↺</button>
     </div>
     <div class="stats-row">${headerStats}</div>
@@ -861,6 +1060,56 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
 
   <script>
     var vscode = acquireVsCodeApi();
+    var lastInteractedObservationId = null;
+    var lastInteractedTraceId = null;
+    var focusedTraceIndex = null;
+    var focusedTraceId = null;
+
+    function reportUiState() {
+      var expanded = [];
+      document.querySelectorAll('.obs-row.expanded').forEach(function(row) {
+        var id = row.getAttribute('data-observation-id');
+        if (id) { expanded.push(id); }
+      });
+      vscode.postMessage({
+        command: 'uiState',
+        focusedTraceIndex: focusedTraceIndex,
+        focusedTraceId: focusedTraceId,
+        expandedObservationIds: expanded,
+        lastInteractedObservationId: lastInteractedObservationId,
+        lastInteractedTraceId: lastInteractedTraceId,
+      });
+    }
+
+    // ── Export span for AI ────────────────────────────────────────────────────
+    document.addEventListener('click', function(ev) {
+      var el = ev.target;
+      while (el && el !== document.body) {
+        if (el.classList && el.classList.contains('obs-export-btn')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var traceId = el.getAttribute('data-trace-id');
+          var observationId = el.getAttribute('data-observation-id');
+          if (traceId && observationId) {
+            el.classList.add('exporting');
+            el.setAttribute('data-exporting-id', observationId);
+            vscode.postMessage({ command: 'exportSpan', traceId: traceId, observationId: observationId });
+          }
+          return;
+        }
+        if (el.classList && el.classList.contains('trace-chat-btn')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var tId = el.getAttribute('data-trace-id');
+          if (tId) {
+            el.classList.add('exporting');
+            vscode.postMessage({ command: 'exportTrace', traceId: tId });
+          }
+          return;
+        }
+        el = el.parentElement;
+      }
+    }, true);
 
     // ── External Langfuse links ───────────────────────────────────────────────
     document.addEventListener('click', function(ev) {
@@ -877,6 +1126,11 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       }
     }, true);
 
+    // ── Send session to chat (MCP pointer) ────────────────────────────────────
+    document.getElementById('btn-send-session-chat').addEventListener('click', function() {
+      vscode.postMessage({ command: 'exportSession' });
+    });
+
     // ── Refresh button ────────────────────────────────────────────────────────
     document.getElementById('btn-refresh').addEventListener('click', function() {
       this.classList.add('spinning');
@@ -889,6 +1143,12 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       if (msg.command === 'refreshDone') {
         var btn = document.getElementById('btn-refresh');
         if (btn) { btn.classList.remove('spinning'); }
+      }
+      if (msg.command === 'exportDone') {
+        document.querySelectorAll('.obs-export-btn.exporting, .trace-chat-btn.exporting').forEach(function(b) {
+          b.classList.remove('exporting');
+          b.removeAttribute('data-exporting-id');
+        });
       }
       if (msg.command === 'focusTrace') {
         var idx = typeof msg.index === 'number' ? msg.index : 0;
@@ -907,6 +1167,9 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         void target.offsetWidth; // reflow to restart animation
         target.classList.add('flash');
         setTimeout(function() { target.classList.remove('flash'); }, 1300);
+        focusedTraceIndex = idx;
+        focusedTraceId = target.getAttribute('data-trace-id');
+        reportUiState();
       }
     });
 
@@ -936,6 +1199,9 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           btn.querySelector('.icon-expand').style.display  = isExpanded ? '' : 'none';
           btn.querySelector('.icon-collapse').style.display = isExpanded ? 'none' : '';
           btn.title = isExpanded ? 'Expand all spans in this trace' : 'Collapse all spans in this trace';
+          focusedTraceIndex = section ? parseInt(section.getAttribute('data-trace-index') || '', 10) : null;
+          focusedTraceId = section ? section.getAttribute('data-trace-id') : null;
+          reportUiState();
         }
         e.stopPropagation();
         return;
@@ -970,7 +1236,12 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           if (!detail) { return; }
           var isOpen = detail.classList.contains('open');
           detail.classList.toggle('open', !isOpen);
-          if (row) { row.classList.toggle('expanded', !isOpen); }
+          if (row) {
+            row.classList.toggle('expanded', !isOpen);
+            lastInteractedObservationId = row.getAttribute('data-observation-id');
+            lastInteractedTraceId = row.getAttribute('data-trace-id');
+          }
+          reportUiState();
           return;
         }
         if (header.classList && header.classList.contains('trace-header')) {
@@ -982,6 +1253,13 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           var isHidden = body.style.display === 'none';
           body.style.display = isHidden ? '' : 'none';
           if (chevron) { chevron.textContent = isHidden ? '▼' : '▶'; }
+          var section = header;
+          while (section && !section.classList.contains('trace-section')) { section = section.parentElement; }
+          if (section) {
+            focusedTraceIndex = parseInt(section.getAttribute('data-trace-index') || '', 10);
+            focusedTraceId = section.getAttribute('data-trace-id');
+            reportUiState();
+          }
           return;
         }
         header = header.parentElement;

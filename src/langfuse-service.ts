@@ -1,15 +1,26 @@
 import * as vscode from 'vscode';
-import { LangfuseClient, LangfuseConfig, defaultLangfuseConfig } from './langfuse-client';
+import { LangfuseConfig, buildLangfuseConfig } from './langfuse-client';
+import { loadTracesAndObservationsWithConfig } from './trace-loader';
+
+const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
+const MAX_RECENT_SESSIONS_LIMIT = 100;
+
+/** Reads how many recent Langfuse sessions to show in the sidebar. */
+export function readRecentSessionsLimit(): number {
+  const configured = vscode.workspace.getConfiguration('langfuse')
+    .get<number>('recentSessionsLimit', DEFAULT_RECENT_SESSIONS_LIMIT);
+  if (!Number.isFinite(configured)) { return DEFAULT_RECENT_SESSIONS_LIMIT; }
+  return Math.max(1, Math.min(Math.trunc(configured), MAX_RECENT_SESSIONS_LIMIT));
+}
 
 /** Reads Langfuse connection settings from VS Code configuration with local defaults. */
 export function readLangfuseConfig(): LangfuseConfig {
-  const defaults = defaultLangfuseConfig();
   const config = vscode.workspace.getConfiguration('langfuse');
-  return {
-    host: config.get<string>('host', defaults.host).trim() || defaults.host,
-    publicKey: config.get<string>('publicKey', defaults.publicKey).trim() || defaults.publicKey,
-    secretKey: config.get<string>('secretKey', defaults.secretKey).trim() || defaults.secretKey,
-  };
+  return buildLangfuseConfig({
+    host: config.get<string>('host'),
+    publicKey: config.get<string>('publicKey'),
+    secretKey: config.get<string>('secretKey'),
+  });
 }
 
 /**
@@ -17,9 +28,5 @@ export function readLangfuseConfig(): LangfuseConfig {
  * Returns null when no traces are found (session not yet traced or not flushed).
  */
 export async function loadTracesAndObservations(sessionId: string) {
-  const client = new LangfuseClient(readLangfuseConfig());
-  const traces = await client.fetchSessionTraces(sessionId);
-  if (traces.length === 0) { return null; }
-  const fullTraces = await Promise.all(traces.map(t => client.fetchFullTrace(t.id)));
-  return { fullTraces, observations: fullTraces.flatMap(t => t.observations ?? []) };
+  return loadTracesAndObservationsWithConfig(readLangfuseConfig(), sessionId);
 }

@@ -1,3 +1,6 @@
 out/
 node_modules/
 *.vsix
+.langfuse/
+.dev-host-workspace/*
+!.dev-host-workspace/.gitkeep
