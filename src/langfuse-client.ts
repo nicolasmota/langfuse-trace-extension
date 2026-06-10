@@ -30,6 +30,13 @@ export interface LangfuseTrace {
   };
 }
 
+export interface LangfuseSession {
+  id: string;
+  createdAt: string;
+  projectId?: string;
+  environment?: string;
+}
+
 export interface LangfuseObservation {
   id: string;
   traceId: string;
@@ -70,6 +77,20 @@ export function defaultLangfuseConfig(): LangfuseConfig {
   };
 }
 
+/** Builds a fully populated Langfuse config from any partial source, trimming and falling back to defaults. */
+export function buildLangfuseConfig(source: {
+  host?: string | null;
+  publicKey?: string | null;
+  secretKey?: string | null;
+}): LangfuseConfig {
+  const defaults = defaultLangfuseConfig();
+  return {
+    host: source.host?.trim() || defaults.host,
+    publicKey: source.publicKey?.trim() || defaults.publicKey,
+    secretKey: source.secretKey?.trim() || defaults.secretKey,
+  };
+}
+
 /** Lightweight Langfuse REST client that avoids adding the full SDK as a dependency. */
 export class LangfuseClient {
   private readonly _host: string;
@@ -88,6 +109,16 @@ export class LangfuseClient {
   async fetchSessionTraces(sessionId: string): Promise<LangfuseTrace[]> {
     const data = await this._get(`/api/public/traces?sessionId=${encodeURIComponent(sessionId)}`);
     return (data?.data ?? []) as LangfuseTrace[];
+  }
+
+  /**
+   * Fetches the most recent Langfuse sessions for the configured project.
+   * Results are ordered newest-first by the API.
+   */
+  async fetchRecentSessions(limit = 10): Promise<LangfuseSession[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const data = await this._get(`/api/public/sessions?limit=${safeLimit}&page=1`);
+    return (data?.data ?? []) as LangfuseSession[];
   }
 
   /**

@@ -109,6 +109,37 @@ describe('LangfuseClient.fetchFullTrace', () => {
   });
 });
 
+describe('LangfuseClient.fetchRecentSessions', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('calls the sessions API with limit and page parameters', async () => {
+    const client = makeClient();
+    const { calls } = captureGet(client);
+    await client.fetchRecentSessions(10);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe('/api/public/sessions?limit=10&page=1');
+  });
+
+  it('clamps the limit between 1 and 100', async () => {
+    const client = makeClient();
+    const { calls } = captureGet(client);
+    await client.fetchRecentSessions(500);
+    expect(calls[0]).toContain('limit=100');
+  });
+
+  it('returns sessions from the API response', async () => {
+    const client = makeClient();
+    stubGet(client, {
+      data: [{ id: 'session-1', createdAt: '2026-01-01T00:00:00.000Z' }],
+    });
+    const result = await client.fetchRecentSessions(5);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('session-1');
+  });
+});
+
 describe('LangfuseClient constructor', () => {
   it('strips a trailing slash from the host', () => {
     const client = new LangfuseClient({
