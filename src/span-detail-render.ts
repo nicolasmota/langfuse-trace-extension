@@ -1,4 +1,4 @@
-import type { LangfuseObservation } from './langfuse-client.js';
+import type { LangfuseObservation, LangfuseScore, LangfuseTrace } from './langfuse-client.js';
 import { isDefined, fmtDate, fmtMs, durationMs } from './trace-utils.js';
 
 /** Escapes a value for safe insertion into HTML text/attributes. */
@@ -572,10 +572,231 @@ export function renderIoSection(
     </div>`;
 }
 
+/** Formats a score value for compact display. */
+export function fmtScoreValue(score: LangfuseScore): string {
+  if (typeof score.stringValue === 'string' && score.stringValue.length > 0) {
+    return score.stringValue;
+  }
+  if (isDefined(score.value) && !Number.isNaN(score.value)) {
+    const abs = Math.abs(score.value);
+    if (Number.isInteger(score.value)) { return String(score.value); }
+    if (abs < 0.01) { return score.value.toFixed(4); }
+    return score.value.toFixed(2);
+  }
+  return '—';
+}
+
+/** Renders a compact list of Langfuse scores. */
+export function renderScores(scores: LangfuseScore[] | undefined, observationId?: string): string {
+  if (!scores || scores.length === 0) { return ''; }
+  const filtered = observationId
+    ? scores.filter(s => s.observationId === observationId)
+    : scores.filter(s => !s.observationId);
+  const list = filtered.length > 0 ? filtered : (observationId ? [] : scores);
+  if (list.length === 0) { return ''; }
+
+  return `<div class="score-list">${list.map(score => {
+    const title = [
+      score.name,
+      fmtScoreValue(score),
+      score.dataType ? `(${score.dataType})` : '',
+      score.comment ? `— ${score.comment}` : '',
+    ].filter(Boolean).join(' ');
+    return `<span class="score-chip" title="${escHtml(title)}">
+      <span class="score-name">${escHtml(score.name)}</span>
+      <span class="score-value">${escHtml(fmtScoreValue(score))}</span>
+    </span>`;
+  }).join('')}</div>`;
+}
+
+/** Formats time-to-first-token from explicit field or completionStartTime delta. */
+export function resolveTtftMs(obs: LangfuseObservation): number | undefined {
+  if (isDefined(obs.timeToFirstToken)) {
+    // Langfuse may return seconds or milliseconds depending on version; treat small values as seconds.
+    return obs.timeToFirstToken < 100 ? obs.timeToFirstToken * 1000 : obs.timeToFirstToken;
+  }
+  if (obs.startTime && obs.completionStartTime) {
+    const start = new Date(obs.startTime).getTime();
+    const first = new Date(obs.completionStartTime).getTime();
+    if (isFinite(start) && isFinite(first) && first >= start) {
+      return first - start;
+    }
+  }
+  return undefined;
+}
+
+/** Renders usageDetails as compact chips, skipping duplicates of input/output totals. */
+export function renderUsageDetailChips(details?: Record<string, number>): string {
+  if (!details) { return ''; }
+  const entries = Object.entries(details)
+    .filter(([, value]) => typeof value === 'number' && !Number.isNaN(value))
+    .filter(([key]) => !['input', 'output', 'total', 'promptTokens', 'completionTokens'].includes(key));
+  if (entries.length === 0) { return ''; }
+  return entries.slice(0, 8).map(([key, value]) =>
+    `<span class="obs-meta-item"><span class="obs-meta-k">${escHtml(key)}</span><span class="obs-meta-v">${escHtml(String(value))}</span></span>`
+  ).join('');
+}
+
+/** Renders costDetails input/output breakdown when available. */
+export function renderCostBreakdown(obs: LangfuseObservation): string {
+  const input = obs.costDetails?.['input'] ?? obs.calculatedInputCost;
+  const output = obs.costDetails?.['output'] ?? obs.calculatedOutputCost;
+  const parts: string[] = [];
+  const inLabel = fmtCost(input);
+  const outLabel = fmtCost(output);
+  if (inLabel) { parts.push(`in ${inLabel}`); }
+  if (outLabel) { parts.push(`out ${outLabel}`); }
+  if (parts.length === 0) { return ''; }
+  return `<span class="obs-meta-item"><span class="obs-meta-k">Cost split</span><span class="obs-meta-v">${escHtml(parts.join(' · '))}</span></span>`;
+}
+
+const METADATA_NOISE_KEYS = new Set([
+  'resourceattributes',
+  'resource_attributes',
+  'attributes',
+  'scope',
+  'batch',
+  'otel',
+  'instrumentation_scope',
+]);
+
+const METADATA_NOISE_PREFIXES = [
+  'telemetry.',
+  'k8s.',
+  'service.',
+  'process.',
+  'host.',
+  'os.',
+  'container.',
+  'deployment.',
+];
+
+/** True when a metadata key is OpenTelemetry / infra noise. */
+export function isNoiseMetadataKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (METADATA_NOISE_KEYS.has(lower)) { return true; }
+  if (lower.includes('public_key') || lower.includes('secret') || lower.includes('api_key')) {
+    return true;
+  }
+  return METADATA_NOISE_PREFIXES.some(prefix => lower.startsWith(prefix));
+}
+
+/** Shortens long ids/hashes for compact display; full value stays in title. */
+export function shortDisplay(value: string, max = 28): string {
+  if (value.length <= max) { return value; }
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value)) {
+    return `${value.slice(0, 8)}…`;
+  }
+  if (value.includes('@') && value.length > max) {
+    const [left, right] = value.split('@', 2);
+    if (right && right.length > 10) {
+      return `${left}@${right.slice(0, 7)}…`;
+    }
+  }
+  return `${value.slice(0, Math.max(8, max - 1))}…`;
+}
+
+/** Parses trace metadata that may arrive as a JSON string. */
+export function parseTraceMetadata(metadata: LangfuseTrace['metadata']): Record<string, unknown> | undefined {
+  if (!isDefined(metadata)) { return undefined; }
+  if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return metadata;
+  }
+  if (typeof metadata === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(metadata);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return { value: metadata };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Picks high-signal scalar metadata for the compact bar.
+ * Nested OTel blobs (resourceAttributes, etc.) are excluded.
+ */
+export function curateTraceMetadata(meta: Record<string, unknown>): {
+  highlights: Array<{ key: string; value: string }>;
+  hasHidden: boolean;
+} {
+  const highlights: Array<{ key: string; value: string }> = [];
+  let hasHidden = false;
+
+  for (const [key, value] of Object.entries(meta)) {
+    if (isNoiseMetadataKey(key)) {
+      hasHidden = true;
+      continue;
+    }
+    if (value !== null && typeof value === 'object') {
+      hasHidden = true;
+      continue;
+    }
+    const text = String(value ?? '').trim();
+    if (!text) { continue; }
+    highlights.push({ key, value: text });
+    if (highlights.length >= 8) {
+      hasHidden = hasHidden || Object.keys(meta).length > highlights.length;
+      break;
+    }
+  }
+
+  if (!hasHidden) {
+    hasHidden = Object.keys(meta).length > highlights.length;
+  }
+  return { highlights, hasHidden };
+}
+
+/** Renders one quiet key/value fact for the trace meta row. */
+function renderTraceFact(key: string, value: string, opts?: { tag?: boolean }): string {
+  const shown = shortDisplay(value);
+  const cls = opts?.tag ? 'trace-fact trace-fact-tag' : 'trace-fact';
+  return `<span class="${cls}" title="${escHtml(`${key}: ${value}`)}"><span class="trace-fact-k">${escHtml(key)}</span><span class="trace-fact-v">${escHtml(shown)}</span></span>`;
+}
+
+/** Renders trace-level facts for tags, user, env, release, version, scores and curated metadata. */
+export function renderTraceMetaBar(trace: LangfuseTrace): string {
+  const facts: string[] = [];
+  if (trace.userId) { facts.push(renderTraceFact('user', trace.userId)); }
+  if (trace.environment) { facts.push(renderTraceFact('env', trace.environment)); }
+  if (trace.release) { facts.push(renderTraceFact('release', trace.release)); }
+  if (trace.version) { facts.push(renderTraceFact('version', trace.version)); }
+  for (const tag of trace.tags ?? []) {
+    facts.push(renderTraceFact('tag', tag, { tag: true }));
+  }
+
+  const meta = parseTraceMetadata(trace.metadata);
+  const curated = meta ? curateTraceMetadata(meta) : undefined;
+  const knownKeys = new Set(['user', 'env', 'environment', 'release', 'version', 'tag', 'tags']);
+  for (const item of curated?.highlights ?? []) {
+    if (knownKeys.has(item.key.toLowerCase())) { continue; }
+    facts.push(renderTraceFact(item.key, item.value));
+  }
+
+  const scoresHtml = renderScores(trace.scores);
+  const showAllMeta = Boolean(meta && (curated?.hasHidden || (curated?.highlights.length ?? 0) === 0));
+  const metaMoreHtml = showAllMeta && meta
+    ? `<details class="trace-meta-more"><summary>All metadata</summary>${renderFieldWithToggle(meta, `tmeta-${escHtml(trace.id)}`)}</details>`
+    : '';
+
+  if (facts.length === 0 && !scoresHtml && !metaMoreHtml) { return ''; }
+
+  return `
+    <div class="trace-meta">
+      ${facts.length ? `<div class="trace-facts">${facts.join('')}</div>` : ''}
+      ${scoresHtml ? `<div class="trace-scores">${scoresHtml}</div>` : ''}
+      ${metaMoreHtml}
+    </div>`;
+}
+
 /** Renders the inspection header shown above span input/output sections. */
-export function renderSpanDetailMeta(obs: LangfuseObservation): string {
+export function renderSpanDetailMeta(obs: LangfuseObservation, scores?: LangfuseScore[]): string {
   const dur = durationMs(obs);
   const cost = fmtCost(resolveObservationCost(obs));
+  const ttft = resolveTtftMs(obs);
   const level = obs.level ? String(obs.level).toUpperCase() : '';
   const levelClass = level === 'ERROR' || level === 'WARNING' || level === 'DEFAULT' || level === 'DEBUG'
     ? `obs-level-${level.toLowerCase()}`
@@ -598,18 +819,37 @@ export function renderSpanDetailMeta(obs: LangfuseObservation): string {
   if (isDefined(dur)) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Duration</span><span class="obs-meta-v">${escHtml(fmtMs(dur))}</span></span>`);
   }
+  if (isDefined(ttft)) {
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">TTFT</span><span class="obs-meta-v">${escHtml(fmtMs(ttft))}</span></span>`);
+  }
   if (level) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Level</span><span class="obs-level ${levelClass}">${escHtml(level)}</span></span>`);
+  }
+  if (obs.environment) {
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Env</span><span class="obs-meta-v">${escHtml(obs.environment)}</span></span>`);
+  }
+  if (obs.version) {
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Version</span><span class="obs-meta-v">${escHtml(obs.version)}</span></span>`);
   }
   if (obs.model) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Model</span><span class="obs-meta-v mono">${escHtml(obs.model)}</span></span>`);
   }
+  if (obs.promptName) {
+    const promptLabel = isDefined(obs.promptVersion)
+      ? `${obs.promptName}@${obs.promptVersion}`
+      : obs.promptName;
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Prompt</span><span class="obs-meta-v mono">${escHtml(promptLabel)}</span></span>`);
+  }
   if (obs.usage) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Tokens</span><span class="obs-meta-v">↑${obs.usage.input ?? '?'} ↓${obs.usage.output ?? '?'}</span></span>`);
   }
+  items.push(renderUsageDetailChips(obs.usageDetails));
   if (cost) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Cost</span><span class="obs-meta-v obs-cost">${escHtml(cost)}</span></span>`);
   }
+  items.push(renderCostBreakdown(obs));
 
-  return `<div class="obs-meta">${items.join('')}</div>`;
+  const scoreHtml = renderScores(scores, obs.id);
+
+  return `<div class="obs-meta">${items.filter(Boolean).join('')}${scoreHtml ? `<div class="obs-scores"><span class="obs-meta-k">Scores</span>${scoreHtml}</div>` : ''}</div>`;
 }

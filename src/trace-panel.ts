@@ -25,6 +25,7 @@ import {
   renderFieldWithToggle,
   renderIoSection,
   renderSpanDetailMeta,
+  renderTraceMetaBar,
 } from './span-detail-render.js';
 
 /** Manages a single "Langfuse Trace" webview panel per chat session. */
@@ -376,7 +377,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       const fldPfx = `fld-${ti}-${oi}`;
       const detailHtml = `
         <div class="obs-detail" id="${detailId}">
-          ${renderSpanDetailMeta(obs)}
+          ${renderSpanDetailMeta(obs, trace.scores)}
           ${isDefined(obs.input) ? renderIoSection(obs.input, `${fldPfx}-input`, 'input') : ''}
           ${isDefined(obs.output) ? renderIoSection(obs.output, `${fldPfx}-output`, 'output') : ''}
           ${isDefined(obs.metadata) ? `<div class="detail-section"><div class="detail-label">Metadata</div>${renderFieldWithToggle(obs.metadata, `${fldPfx}-metadata`)}</div>` : ''}
@@ -423,6 +424,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         ${isDefined(trace.input) ? renderIoSection(trace.input, `${ioFldPfx}-input`, 'user') : ''}
         ${isDefined(trace.output) ? renderIoSection(trace.output, `${ioFldPfx}-output`, 'assistant') : ''}
       </div>` : '';
+    const traceMetaHtml = renderTraceMetaBar(trace);
 
     return `
       <div class="trace-section" data-trace-id="${escHtml(trace.id)}" data-trace-index="${ti}">
@@ -446,6 +448,7 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           </a>` : ''}
         </div>
         <div class="trace-body" id="trace-body-${ti}">
+          ${traceMetaHtml}
           ${traceIoHtml}
           ${traceObs.length === 0
           ? '<div class="dim" style="padding:10px 16px;font-size:0.85em">No observations recorded for this trace.</div>'
@@ -660,6 +663,79 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   .trace-usage { font-size: 0.78em; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
   .dim-stat { opacity: 0.6; }
   .trace-body { border-top: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.06)); }
+  .trace-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 16px 2px;
+  }
+  .trace-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    font-size: 0.78em;
+    line-height: 1.45;
+    color: var(--vscode-descriptionForeground);
+  }
+  .trace-fact {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    min-width: 0;
+  }
+  .trace-fact-k {
+    opacity: 0.75;
+    font-weight: 500;
+  }
+  .trace-fact-k::after { content: ''; }
+  .trace-fact-v {
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.96em;
+  }
+  .trace-fact-tag .trace-fact-v {
+    color: var(--vscode-terminal-ansiCyan, #56b6c2);
+    font-family: inherit;
+  }
+  .score-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    font-size: 0.78em;
+  }
+  .score-name {
+    color: var(--vscode-descriptionForeground);
+    font-weight: 500;
+  }
+  .score-value {
+    font-family: var(--vscode-editor-font-family);
+    color: var(--vscode-foreground);
+  }
+  .trace-scores, .obs-scores {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .score-list { display: inline-flex; flex-wrap: wrap; gap: 10px; }
+  .trace-meta-more {
+    font-size: 0.78em;
+    color: var(--vscode-descriptionForeground);
+  }
+  .trace-meta-more > summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    width: fit-content;
+    padding: 2px 0;
+  }
+  .trace-meta-more > summary::-webkit-details-marker { display: none; }
+  .trace-meta-more > summary::before {
+    content: '▸ ';
+    opacity: 0.7;
+  }
+  .trace-meta-more[open] > summary::before { content: '▾ '; }
+  .trace-meta-more[open] > summary { margin-bottom: 6px; }
 
   /* ── Trace-level I/O preview ── */
   .trace-io {

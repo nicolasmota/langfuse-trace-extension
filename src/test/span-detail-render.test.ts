@@ -1,21 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import type { LangfuseObservation } from '../langfuse-client.js';
+import type { LangfuseObservation, LangfuseScore, LangfuseTrace } from '../langfuse-client.js';
 import {
   escHtml,
   extractPrimaryText,
   fmtCost,
+  fmtScoreValue,
   highlightJson,
   isChatMessages,
   isToolCall,
   isToolCallList,
+  parseTraceMetadata,
+  curateTraceMetadata,
+  renderCostBreakdown,
   renderFieldWithToggle,
   renderFormatted,
   renderIoSection,
   renderMarkdownLite,
   renderObsJson,
+  renderScores,
   renderSpanDetailMeta,
   renderToolCall,
+  renderTraceMetaBar,
   resolveObservationCost,
+  resolveTtftMs,
 } from '../span-detail-render.js';
 
 describe('escHtml', () => {
@@ -241,6 +248,99 @@ describe('extractPrimaryText / renderIoSection', () => {
   });
 });
 
+describe('fmtScoreValue / renderScores', () => {
+  it('prefers stringValue and formats numeric scores', () => {
+    expect(fmtScoreValue({ id: '1', name: 'label', stringValue: 'pass' })).toBe('pass');
+    expect(fmtScoreValue({ id: '2', name: 'n', value: 1 })).toBe('1');
+    expect(fmtScoreValue({ id: '3', name: 'f', value: 0.1234 })).toBe('0.12');
+  });
+
+  it('filters observation scores by observationId', () => {
+    const scores: LangfuseScore[] = [
+      { id: 's1', name: 'trace_score', value: 1 },
+      { id: 's2', name: 'span_score', observationId: 'obs-1', value: 0.9 },
+      { id: 's3', name: 'other', observationId: 'obs-2', value: 0.1 },
+    ];
+    const spanHtml = renderScores(scores, 'obs-1');
+    expect(spanHtml).toContain('span_score');
+    expect(spanHtml).not.toContain('trace_score');
+    expect(spanHtml).not.toContain('other');
+
+    const traceHtml = renderScores(scores);
+    expect(traceHtml).toContain('trace_score');
+    expect(traceHtml).not.toContain('span_score');
+  });
+});
+
+describe('resolveTtftMs', () => {
+  it('uses timeToFirstToken seconds when value is small', () => {
+    expect(resolveTtftMs({
+      id: 'o1',
+      traceId: 't1',
+      timeToFirstToken: 0.42,
+    })).toBeCloseTo(420);
+  });
+
+  it('derives TTFT from completionStartTime', () => {
+    expect(resolveTtftMs({
+      id: 'o1',
+      traceId: 't1',
+      startTime: '2026-07-24T12:00:00.000Z',
+      completionStartTime: '2026-07-24T12:00:00.250Z',
+    })).toBe(250);
+  });
+});
+
+describe('parseTraceMetadata / curateTraceMetadata / renderTraceMetaBar', () => {
+  it('parses JSON-string metadata', () => {
+    expect(parseTraceMetadata('{"agent":"bot"}')).toEqual({ agent: 'bot' });
+  });
+
+  it('hides OTel resource noise and keeps useful scalars', () => {
+    const curated = curateTraceMetadata({
+      stream_id: 'e189ebbd-deb2-57fa-8e93-813e8f1b00c5',
+      chatbot_id: 'mora_chatbot',
+      resourceAttributes: {
+        'k8s.namespace.name': 'staging',
+        'service.name': 'agentic-chatbot-service',
+      },
+      attributes: { public_key: 'pk-lf-secret' },
+    });
+    expect(curated.highlights).toEqual([
+      { key: 'stream_id', value: 'e189ebbd-deb2-57fa-8e93-813e8f1b00c5' },
+      { key: 'chatbot_id', value: 'mora_chatbot' },
+    ]);
+    expect(curated.hasHidden).toBe(true);
+  });
+
+  it('renders quiet facts and collapses full metadata', () => {
+    const trace: LangfuseTrace = {
+      id: 'trace-1',
+      userId: '7c979619-f1a0-41cb-8db1-a385072e9a37',
+      environment: 'production',
+      release: '05c0767@cedcefb636778f43d82c7eade3beb622',
+      version: 'staging-serving-05c0767',
+      tags: ['whatsapp'],
+      metadata: {
+        stream_id: 'e189ebbd-deb2-57fa-8e93-813e8f1b00c5',
+        chatbot_id: 'mora_chatbot',
+        resourceAttributes: { 'k8s.namespace.name': 'staging' },
+      },
+      scores: [{ id: 's1', name: 'quality', value: 0.8 }],
+    };
+    const html = renderTraceMetaBar(trace);
+    expect(html).toContain('trace-facts');
+    expect(html).toContain('7c979619…');
+    expect(html).toContain('mora_chatbot');
+    expect(html).toContain('stream_id');
+    expect(html).toContain('quality');
+    expect(html).toContain('All metadata');
+    expect(html).not.toContain('TRACE METADATA');
+    expect(html.indexOf('k8s.namespace.name')).toBeGreaterThan(html.indexOf('All metadata'));
+    expect(html).not.toContain('trace-chip');
+  });
+});
+
 describe('renderSpanDetailMeta', () => {
   it('includes id, timing, level, model, tokens and cost', () => {
     const obs: LangfuseObservation = {
@@ -260,5 +360,32 @@ describe('renderSpanDetailMeta', () => {
     expect(html).toContain('↑10 ↓20');
     expect(html).toContain('$0.0042');
     expect(html).toContain('data-copy="obs-abc-123"');
+  });
+
+  it('shows prompt, TTFT, usageDetails, cost split and observation scores', () => {
+    const obs: LangfuseObservation = {
+      id: 'obs-1',
+      traceId: 't1',
+      startTime: '2026-07-24T12:00:00.000Z',
+      completionStartTime: '2026-07-24T12:00:00.100Z',
+      promptName: 'system-prompt',
+      promptVersion: 3,
+      environment: 'staging',
+      usageDetails: { cached_tokens: 12, reasoning_tokens: 4 },
+      costDetails: { input: 0.0001, output: 0.0002, total: 0.0003 },
+    };
+    const scores: LangfuseScore[] = [
+      { id: 's1', name: 'relevance', observationId: 'obs-1', value: 0.95 },
+      { id: 's2', name: 'global', value: 1 },
+    ];
+    const html = renderSpanDetailMeta(obs, scores);
+    expect(html).toContain('system-prompt@3');
+    expect(html).toContain('TTFT');
+    expect(html).toContain('staging');
+    expect(html).toContain('cached_tokens');
+    expect(html).toContain('Cost split');
+    expect(html).toContain('relevance');
+    expect(html).not.toContain('global');
+    expect(renderCostBreakdown(obs)).toContain('in $0.0001');
   });
 });

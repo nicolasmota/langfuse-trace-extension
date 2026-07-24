@@ -13,6 +13,10 @@ export interface LangfuseTrace {
   name?: string;
   timestamp?: string;
   sessionId?: string;
+  userId?: string;
+  release?: string;
+  version?: string;
+  environment?: string;
   input?: unknown;
   output?: unknown;
   /**
@@ -24,11 +28,15 @@ export interface LangfuseTrace {
   tags?: string[];
   latency?: number;
   totalCost?: number;
+  htmlPath?: string;
+  public?: boolean;
   usage?: {
     input?: number;
     output?: number;
     total?: number;
   };
+  scores?: LangfuseScore[];
+  observations?: LangfuseObservation[];
 }
 
 export interface LangfuseSession {
@@ -39,6 +47,19 @@ export interface LangfuseSession {
   traces?: LangfuseTrace[];
 }
 
+export interface LangfuseScore {
+  id: string;
+  name: string;
+  traceId?: string;
+  observationId?: string | null;
+  value?: number | null;
+  stringValue?: string | null;
+  dataType?: string;
+  comment?: string | null;
+  source?: string;
+  timestamp?: string;
+}
+
 export interface LangfuseObservation {
   id: string;
   traceId: string;
@@ -47,19 +68,27 @@ export interface LangfuseObservation {
   type?: string;
   startTime?: string;
   endTime?: string;
+  completionStartTime?: string;
+  timeToFirstToken?: number;
   input?: unknown;
   output?: unknown;
   metadata?: Record<string, unknown>;
   level?: string;
   statusMessage?: string;
+  version?: string;
+  environment?: string;
   model?: string;
   modelParameters?: Record<string, unknown>;
+  promptId?: string;
+  promptName?: string;
+  promptVersion?: number;
   usage?: {
     input?: number;
     output?: number;
     total?: number;
     unit?: string;
   };
+  usageDetails?: Record<string, number>;
   calculatedInputCost?: number;
   calculatedOutputCost?: number;
   calculatedTotalCost?: number;

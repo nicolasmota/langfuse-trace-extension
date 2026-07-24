@@ -115,14 +115,22 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
       if (sessions.length === 0) {
         return [new MessageTreeItem('No recent sessions in Langfuse')];
       }
-      return sessions.map(session => new SessionTreeItem(
-        session.id,
-        vscode.TreeItemCollapsibleState.Collapsed,
-        {
-          description: formatSessionDescription(session.createdAt),
-          tooltip: `Langfuse session: ${session.id}\nCreated: ${new Date(session.createdAt).toLocaleString()}`,
-        },
-      ));
+      return sessions.map(session => {
+        const env = session.environment ? ` · ${session.environment}` : '';
+        return new SessionTreeItem(
+          session.id,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          {
+            description: `${formatSessionDescription(session.createdAt)}${env}`,
+            tooltip: [
+              `Langfuse session: ${session.id}`,
+              `Created: ${new Date(session.createdAt).toLocaleString()}`,
+              session.environment ? `Environment: ${session.environment}` : undefined,
+              session.projectId ? `Project: ${session.projectId}` : undefined,
+            ].filter(Boolean).join('\n'),
+          },
+        );
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return [new MessageTreeItem(`Could not load sessions: ${message}`)];
@@ -160,10 +168,25 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
         const obsCount = (trace.observations ?? []).length;
         const duration = trace.latency ? fmtMs(trace.latency * 1000) : undefined;
         const label = trace.name ?? `trace ${traceIndex + 1}`;
-        const suffix = [duration, obsCount > 0 ? `${obsCount} spans` : undefined]
-          .filter(Boolean)
-          .join(' · ');
-        return new TraceTreeItem(sessionId, trace, traceIndex, suffix ? `${label} (${suffix})` : label);
+        const tagHint = (trace.tags ?? []).slice(0, 2).join(', ');
+        const suffix = [
+          duration,
+          obsCount > 0 ? `${obsCount} spans` : undefined,
+          trace.userId ? `user:${trace.userId}` : undefined,
+          tagHint || undefined,
+        ].filter(Boolean).join(' · ');
+        const item = new TraceTreeItem(sessionId, trace, traceIndex, suffix ? `${label} (${suffix})` : label);
+        item.tooltip = [
+          `Trace: ${trace.id}`,
+          trace.userId ? `User: ${trace.userId}` : undefined,
+          trace.environment ? `Env: ${trace.environment}` : undefined,
+          trace.release ? `Release: ${trace.release}` : undefined,
+          (trace.tags ?? []).length ? `Tags: ${(trace.tags ?? []).join(', ')}` : undefined,
+          (trace.scores ?? []).length
+            ? `Scores: ${(trace.scores ?? []).map(s => `${s.name}=${s.stringValue ?? s.value ?? '?'}`).join(', ')}`
+            : undefined,
+        ].filter(Boolean).join('\n');
+        return item;
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
