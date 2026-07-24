@@ -29,35 +29,55 @@ describe('LangfuseClient.fetchSessionTraces', () => {
     vi.restoreAllMocks();
   });
 
-  it('calls the API with the correct sessionId query parameter', async () => {
+  it('prefers the sessions endpoint for a session id', async () => {
     const client = makeClient();
-    const { calls } = captureGet(client);
-    await client.fetchSessionTraces('my-session-123');
+    const calls: string[] = [];
+    vi.spyOn(client as unknown as { _get: (path: string) => Promise<unknown> }, '_get')
+      .mockImplementation(async (path: string) => {
+        calls.push(path);
+        return { id: 'my-session-123', traces: [{ id: 'trace-1' }] };
+      });
+    const result = await client.fetchSessionTraces('my-session-123');
+    expect(result).toHaveLength(1);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain('sessionId=my-session-123');
+    expect(calls[0]).toBe('/api/public/sessions/my-session-123');
   });
 
-  it('URL-encodes the sessionId', async () => {
+  it('URL-encodes the sessionId on the sessions endpoint', async () => {
     const client = makeClient();
-    const { calls } = captureGet(client);
+    const calls: string[] = [];
+    vi.spyOn(client as unknown as { _get: (path: string) => Promise<unknown> }, '_get')
+      .mockImplementation(async (path: string) => {
+        calls.push(path);
+        return { id: 'encoded-session', traces: [{ id: 'trace-1' }] };
+      });
     await client.fetchSessionTraces('session/with spaces&special=chars');
-    expect(calls[0]).toContain(encodeURIComponent('session/with spaces&special=chars'));
+    expect(calls[0]).toBe(`/api/public/sessions/${encodeURIComponent('session/with spaces&special=chars')}`);
   });
 
-  it('returns an empty array when the API response has no data', async () => {
+  it('falls back to the traces list when the sessions endpoint has no traces', async () => {
     const client = makeClient();
-    stubGet(client, {});
+    const calls: string[] = [];
+    vi.spyOn(client as unknown as { _get: (path: string) => Promise<unknown> }, '_get')
+      .mockImplementation(async (path: string) => {
+        calls.push(path);
+        if (path.startsWith('/api/public/sessions/')) {
+          return { id: 'empty-session', traces: [] };
+        }
+        return { data: [] };
+      });
     const result = await client.fetchSessionTraces('empty-session');
     expect(result).toEqual([]);
+    expect(calls.some(path => path.includes('sessionId=empty-session'))).toBe(true);
   });
 
-  it('returns the traces array from the API response', async () => {
+  it('returns traces embedded in the sessions endpoint response', async () => {
     const client = makeClient();
     const traces: Partial<LangfuseTrace>[] = [
       { id: 'trace-1', name: 'chat' },
       { id: 'trace-2', name: 'chat' },
     ];
-    stubGet(client, { data: traces });
+    stubGet(client, { id: 'session-abc', traces });
     const result = await client.fetchSessionTraces('session-abc');
     expect(result).toHaveLength(2);
     expect(result[0].id).toBe('trace-1');

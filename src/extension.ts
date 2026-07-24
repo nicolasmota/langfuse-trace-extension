@@ -1,19 +1,24 @@
 import * as vscode from 'vscode';
 import { TraceViewerPanel } from './trace-panel';
 import {
+  readLangfuseConfig,
   readLangfuseConfigAsync,
+  readVaultCredentialSettings,
   loadTracesAndObservations,
+  storeLangfuseCredentials,
   SECRET_KEY_STORAGE_ID,
 } from './langfuse-service';
+import { LangfuseClient } from './langfuse-client';
 import { LangfuseMcpHost } from './mcp/http-host';
 import { createPanelActions } from './mcp/panel-tools';
 import { registerCursorMcp, unregisterCursorMcp } from './mcp/register-cursor';
 import { LangfuseSessionsProvider, SessionTreeItem } from './session/tree';
 import { rememberSession } from './session/store';
 import { performExportContext } from './export-service';
+import { fetchLangfuseCredentialsFromVault } from './vault-credentials';
 
 export function activate(context: vscode.ExtensionContext): void {
-  const sessionsProvider = new LangfuseSessionsProvider(context.globalState);
+  const sessionsProvider = new LangfuseSessionsProvider(context.globalState, context.secrets);
   context.subscriptions.push(
     vscode.window.createTreeView('langfuse.sessions', {
       treeDataProvider: sessionsProvider,
@@ -196,6 +201,38 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage('Langfuse secret key saved to SecretStorage.');
       }
       registerCursorMcp(context);
+    }),
+    vscode.commands.registerCommand('langfuse.syncCredentialsFromVault', async () => {
+      const vaultSettings = readVaultCredentialSettings();
+      try {
+        const fromVault = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Langfuse: fetching credentials from Vault',
+            cancellable: false,
+          },
+          async () => fetchLangfuseCredentialsFromVault(vaultSettings),
+        );
+        const settingsConfig = readLangfuseConfig();
+        const credentials = {
+          host: fromVault.host?.trim() || settingsConfig.host,
+          publicKey: fromVault.publicKey,
+          secretKey: fromVault.secretKey,
+        };
+        const client = new LangfuseClient(credentials);
+        await client.fetchRecentSessions(1);
+        await storeLangfuseCredentials(context.secrets, credentials, {
+          updateHostSetting: Boolean(fromVault.host?.trim()),
+        });
+        registerCursorMcp(context);
+        sessionsProvider.refresh();
+        void vscode.window.showInformationMessage(
+          `Langfuse credentials synced from Vault and MCP re-registered (${credentials.host}).`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        void vscode.window.showErrorMessage(`Could not sync Langfuse credentials from Vault: ${message}`);
+      }
     }),
     vscode.commands.registerCommand(
       'langfuse.autoRefreshIfOpen',

@@ -1,4 +1,4 @@
-name: Publish to VS Code Marketplace
+name: Publish
 
 on:
   push:
@@ -31,6 +31,9 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         run: npx vsce publish --pat "${{ secrets.VSCE_PAT }}"
+
+      - name: Publish to Open VSX (Cursor)
+        run: npx ovsx publish *.vsix -p "${{ secrets.OVSX_PAT }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -1,5 +1,6 @@
 import * as https from 'https';
 import * as http from 'http';
+import { isRetryableLangfuseNetworkError, langfuseHostCandidates, normalizeLangfuseHost } from './langfuse-hosts.js';
 
 export interface LangfuseConfig {
   host: string;
@@ -35,6 +36,7 @@ export interface LangfuseSession {
   createdAt: string;
   projectId?: string;
   environment?: string;
+  traces?: LangfuseTrace[];
 }
 
 export interface LangfuseObservation {
@@ -67,6 +69,8 @@ export interface LangfuseObservation {
 const DEFAULT_HOST = 'http://127.0.0.1:3000';
 const DEFAULT_PUBLIC_KEY = 'pk-lf-local-dev';
 const DEFAULT_SECRET_KEY = 'sk-lf-local-dev';
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const TRACE_LIST_LOOKBACK_DAYS = 30;
 
 /** Returns default Langfuse configuration for local development. */
 export function defaultLangfuseConfig(): LangfuseConfig {
@@ -93,21 +97,44 @@ export function buildLangfuseConfig(source: {
 
 /** Lightweight Langfuse REST client that avoids adding the full SDK as a dependency. */
 export class LangfuseClient {
-  private readonly _host: string;
+  private readonly _hosts: string[];
   private readonly _authHeader: string;
+  private _activeHostIndex = 0;
 
   constructor(config: LangfuseConfig) {
-    this._host = config.host.replace(/\/$/, '');
+    this._hosts = langfuseHostCandidates(config.host);
     const credentials = Buffer.from(`${config.publicKey}:${config.secretKey}`).toString('base64');
     this._authHeader = `Basic ${credentials}`;
   }
 
+  /** Returns the host that last served a successful request. */
+  get activeHost(): string {
+    return this._hosts[this._activeHostIndex] ?? normalizeLangfuseHost(this._hosts[0] ?? DEFAULT_HOST);
+  }
+
   /**
-   * Fetches traces associated with a Langfuse session using the native
-   * `sessionId` query parameter supported by the REST API.
+   * Fetches traces for a session, preferring the faster sessions endpoint and falling
+   * back to the legacy traces list with a bounded date range.
    */
   async fetchSessionTraces(sessionId: string): Promise<LangfuseTrace[]> {
-    const data = await this._get(`/api/public/traces?sessionId=${encodeURIComponent(sessionId)}`);
+    try {
+      const session = await this._getWithFallback(
+        `/api/public/sessions/${encodeURIComponent(sessionId)}`,
+      ) as unknown as LangfuseSession;
+      if (Array.isArray(session.traces) && session.traces.length > 0) {
+        return session.traces;
+      }
+    } catch {
+      // Fall back to the traces list endpoint below.
+    }
+
+    const fromTimestamp = new Date(
+      Date.now() - TRACE_LIST_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const data = await this._getWithFallback(
+      `/api/public/traces?sessionId=${encodeURIComponent(sessionId)}`
+      + `&limit=50&fromTimestamp=${encodeURIComponent(fromTimestamp)}`,
+    );
     return (data?.data ?? []) as LangfuseTrace[];
   }
 
@@ -117,7 +144,7 @@ export class LangfuseClient {
    */
   async fetchRecentSessions(limit = 10): Promise<LangfuseSession[]> {
     const safeLimit = Math.max(1, Math.min(limit, 100));
-    const data = await this._get(`/api/public/sessions?limit=${safeLimit}&page=1`);
+    const data = await this._getWithFallback(`/api/public/sessions?limit=${safeLimit}&page=1`);
     return (data?.data ?? []) as LangfuseSession[];
   }
 
@@ -133,13 +160,36 @@ export class LangfuseClient {
    * that Langfuse stitches together internally.
    */
   async fetchFullTrace(traceId: string): Promise<LangfuseTrace & { observations: LangfuseObservation[] }> {
-    const data = await this._get(`/api/public/traces/${encodeURIComponent(traceId)}`);
+    const data = await this._getWithFallback(`/api/public/traces/${encodeURIComponent(traceId)}`);
     return data as unknown as LangfuseTrace & { observations: LangfuseObservation[] };
   }
 
+  private async _getWithFallback(path: string): Promise<Record<string, unknown>> {
+    let lastError: Error | undefined;
+
+    for (let hostIndex = 0; hostIndex < this._hosts.length; hostIndex++) {
+      this._activeHostIndex = hostIndex;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await this._get(path);
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          lastError = error;
+          const retryable = isRetryableLangfuseNetworkError(error.message);
+          if (!retryable || attempt === 1) {
+            break;
+          }
+        }
+      }
+    }
+
+    throw lastError ?? new Error('Langfuse request failed');
+  }
+
   private _get(path: string): Promise<Record<string, unknown>> {
+    const host = this._hosts[this._activeHostIndex];
     return new Promise((resolve, reject) => {
-      const url = `${this._host}${path}`;
+      const url = `${host}${path}`;
       const parsed = new URL(url);
       const isHttps = parsed.protocol === 'https:';
       const options: http.RequestOptions = {
@@ -173,9 +223,9 @@ export class LangfuseClient {
       });
 
       req.on('error', (err: Error) => reject(new Error(`Langfuse request failed: ${err.message}`)));
-      req.setTimeout(10000, () => {
+      req.setTimeout(DEFAULT_REQUEST_TIMEOUT_MS, () => {
         req.destroy();
-        reject(new Error('Langfuse request timed out after 10s'));
+        reject(new Error(`Langfuse request timed out after ${DEFAULT_REQUEST_TIMEOUT_MS / 1000}s`));
       });
       req.end();
     });

@@ -8,7 +8,7 @@ Inspect LLM traces, spans, token usage and costs from [Langfuse](https://langfus
 
 ## Quick start
 
-1. **Configure Langfuse** in Settings → search `langfuse` and set `host`, `publicKey`, and `secretKey`.
+1. **Configure Langfuse** in Settings → search `langfuse` and set `host`, `publicKey`, and `secretKey` (or use SecretStorage / Sync Credentials from Vault if you configure a Vault CLI).
 2. **Open the Langfuse sidebar** — click the Langfuse icon in the Activity Bar. Recent sessions from your project load automatically.
 3. **Open a session** — click a session in the sidebar, or use the Command Palette:
    - `Langfuse: Open Trace Panel` — focuses the active panel or prompts for a session ID
@@ -41,15 +41,32 @@ The first trace panel opens beside your editor; additional sessions open as tabs
 | `Langfuse: Hide from Sidebar` | Remove a session from the sidebar (does not delete data in Langfuse) |
 | `Langfuse: Send Session to Chat (MCP)` | Send an MCP pointer for a sidebar session to chat |
 | `Langfuse: Register MCP Server` | Re-register the Langfuse MCP server with Cursor |
+| `Langfuse: Sync Credentials from Vault` | Fetch project keys via a configured Vault CLI into SecretStorage and re-register MCP |
+| `Langfuse: Set Secret Key (SecretStorage)` | Manually store/clear the secret key in SecretStorage |
 
 ## Configuration
 
 | Setting | Default | Description |
 |---|---|---|
 | `langfuse.host` | `http://127.0.0.1:3000` | Base URL of your Langfuse instance |
-| `langfuse.publicKey` | `pk-lf-local-dev` | Langfuse public API key |
-| `langfuse.secretKey` | `sk-lf-local-dev` | Langfuse secret API key |
+| `langfuse.publicKey` | `pk-lf-local-dev` | Langfuse public API key (overridden by Vault sync / SecretStorage) |
+| `langfuse.secretKey` | `sk-lf-local-dev` | Langfuse secret API key (prefer Vault sync / SecretStorage) |
+| `langfuse.vault.cli` | _(empty)_ | Vault CLI executable (`<cli> kv get -e <env> <path> --no-prompt`) |
+| `langfuse.vault.env` | _(empty)_ | Vault environment for `-e` |
+| `langfuse.vault.path` | _(empty)_ | Optional combined Vault path with `public_key` + `secret_key` |
+| `langfuse.vault.publicKeyPath` | _(empty)_ | Vault path for a split public-key secret |
+| `langfuse.vault.secretKeyPath` | _(empty)_ | Vault path for a split secret-key secret |
+| `langfuse.vault.field` | `value` | Field name inside split secrets |
 | `langfuse.recentSessionsLimit` | `10` | How many recent sessions to show in the sidebar (1–100) |
+
+### Vault sync (optional)
+
+Configure `langfuse.vault.cli` and `langfuse.vault.env`, plus either:
+
+- `langfuse.vault.path` — one secret with `public_key` / `secret_key` (`key:value` lines), or
+- `langfuse.vault.publicKeyPath` + `langfuse.vault.secretKeyPath` — two secrets (field `value` by default)
+
+Then run **Langfuse: Sync Credentials from Vault**.
 
 ## Requirements
 
