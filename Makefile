@@ -2,7 +2,8 @@ SHELL := /bin/bash
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 DEV_WORKSPACE := $(ROOT)/.dev-host-workspace
 NPM ?= npm
-VSIX := $(ROOT)/langfuse-traces.vsix
+VERSION := $(shell node -p "require('$(ROOT)/package.json').version")
+VSIX := $(ROOT)/langfuse-traces-$(VERSION).vsix
 EXT_ID := nicolasmota.langfuse-traces
 
 # Prefer Cursor when available; override with: make dev IDE=code
@@ -80,7 +81,7 @@ clean: ## Remove out/, .vsix, and build artifacts
 
 rebuild: clean build ## Clean and recompile
 
-package: build ## Build langfuse-traces.vsix
+package: build ## Build langfuse-traces-<version>.vsix
 	npx @vscode/vsce package --out "$(VSIX)"
 	@printf "VSIX created: %s\n" "$(VSIX)"
 

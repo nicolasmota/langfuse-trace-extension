@@ -29,8 +29,20 @@ jobs:
       - name: Package extension
         run: npx vsce package
 
+      # VS Code Marketplace needs a PAT from the Microsoft account that owns
+      # publisher "nicolasmota". If VSCE_PAT is missing/invalid, skip this step
+      # so Open VSX (Cursor) still publishes.
       - name: Publish to VS Code Marketplace
-        run: npx vsce publish --pat "${{ secrets.VSCE_PAT }}"
+        id: marketplace
+        continue-on-error: true
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT}" ]; then
+            echo "VSCE_PAT not set; skipping Marketplace publish."
+            exit 0
+          fi
+          npx vsce publish --pat "${VSCE_PAT}"
 
       - name: Publish to Open VSX (Cursor)
         run: npx ovsx publish *.vsix -p "${{ secrets.OVSX_PAT }}"
