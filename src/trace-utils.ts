@@ -86,23 +86,149 @@ export function computeTraceTokens(
  * the parentObservationId chain. Depth 0 = root (no parent in the set).
  */
 export function computeDepths(obs: LangfuseObservation[]): Map<string, number> {
-  const idSet = new Set(obs.map(o => o.id));
+  return computeDepthsWithParents(obs, resolveDisplayParents(obs));
+}
+
+/** Computes nesting depths from an explicit parent map. */
+export function computeDepthsWithParents(
+  obs: LangfuseObservation[],
+  parents: Map<string, string | null>,
+): Map<string, number> {
   const depths = new Map<string, number>();
 
-  function depthOf(id: string): number {
+  function depthOf(id: string, stack: Set<string>): number {
     if (depths.has(id)) { return depths.get(id)!; }
-    const o = obs.find(x => x.id === id);
-    if (!o || !o.parentObservationId || !idSet.has(o.parentObservationId)) {
+    if (stack.has(id)) {
       depths.set(id, 0);
       return 0;
     }
-    const d = depthOf(o.parentObservationId) + 1;
+    const parent = parents.get(id) ?? null;
+    if (!parent) {
+      depths.set(id, 0);
+      return 0;
+    }
+    stack.add(id);
+    const d = depthOf(parent, stack) + 1;
+    stack.delete(id);
     depths.set(id, d);
     return d;
   }
 
-  obs.forEach(o => depthOf(o.id));
+  obs.forEach(o => depthOf(o.id, new Set()));
   return depths;
+}
+
+/**
+ * Resolves the display parent for each observation from `parentObservationId`.
+ * Matches Langfuse UI hierarchy; time overlap alone must not reparent siblings
+ * such as `send_chatbot_message` under a concurrent `call_llm`.
+ */
+export function resolveDisplayParents(obs: LangfuseObservation[]): Map<string, string | null> {
+  const idSet = new Set(obs.map(o => o.id));
+  const result = new Map<string, string | null>();
+  for (const o of obs) {
+    result.set(
+      o.id,
+      o.parentObservationId && idSet.has(o.parentObservationId) ? o.parentObservationId : null,
+    );
+  }
+  return result;
+}
+
+/**
+ * Returns observation IDs that should be hidden given a set of collapsed parents.
+ * Walks display-parent links so interleaved children still collapse correctly.
+ */
+export function computeHiddenByCollapsedParents(
+  obs: LangfuseObservation[],
+  collapsedIds: Iterable<string>,
+): Set<string> {
+  const parents = resolveDisplayParents(obs);
+  const collapsed = new Set(collapsedIds);
+  const hidden = new Set<string>();
+
+  for (const o of obs) {
+    let parentId = parents.get(o.id) ?? null;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      if (collapsed.has(parentId)) {
+        hidden.add(o.id);
+        break;
+      }
+      parentId = parents.get(parentId) ?? null;
+    }
+  }
+
+  return hidden;
+}
+
+/** One column in a folder-style tree guide: continuing pipe, branch, last child, or blank. */
+export type TreeGuideCell = 'blank' | 'pipe' | 'branch' | 'last';
+
+/**
+ * Groups observation IDs by display parent. Roots use `null`.
+ * Children keep the relative order of `obs`.
+ */
+export function computeChildrenByParent(obs: LangfuseObservation[]): Map<string | null, string[]> {
+  const parents = resolveDisplayParents(obs);
+  const childrenByParent = new Map<string | null, string[]>();
+
+  for (const o of obs) {
+    const parent = parents.get(o.id) ?? null;
+    const list = childrenByParent.get(parent) ?? [];
+    list.push(o.id);
+    childrenByParent.set(parent, list);
+  }
+
+  return childrenByParent;
+}
+
+/**
+ * Builds per-observation tree guide columns for a folder-style hierarchy.
+ * Cells follow display order of `obs` (siblings keep that relative order).
+ */
+export function computeTreeGuides(obs: LangfuseObservation[]): Map<string, TreeGuideCell[]> {
+  const parents = resolveDisplayParents(obs);
+  const depths = computeDepthsWithParents(obs, parents);
+  const childrenByParent = computeChildrenByParent(obs);
+
+  const isLastAmongSiblings = new Map<string, boolean>();
+  for (const children of childrenByParent.values()) {
+    children.forEach((id, i) => {
+      isLastAmongSiblings.set(id, i === children.length - 1);
+    });
+  }
+
+  const guides = new Map<string, TreeGuideCell[]>();
+  for (const o of obs) {
+    const depth = depths.get(o.id) ?? 0;
+    if (depth === 0) {
+      guides.set(o.id, []);
+      continue;
+    }
+
+    const ancestors: string[] = [];
+    let currentId: string | null = o.id;
+    const seen = new Set<string>();
+    while (currentId) {
+      const parent: string | null = parents.get(currentId) ?? null;
+      if (!parent || seen.has(parent)) { break; }
+      seen.add(parent);
+      ancestors.unshift(parent);
+      currentId = parent;
+    }
+
+    const cells: TreeGuideCell[] = [];
+    for (let i = 0; i < depth - 1; i++) {
+      const throughChild = ancestors[i + 1];
+      cells.push(throughChild && isLastAmongSiblings.get(throughChild) ? 'blank' : 'pipe');
+    }
+    cells.push(isLastAmongSiblings.get(o.id) ? 'last' : 'branch');
+    guides.set(o.id, cells);
+  }
+
+  return guides;
 }
 
 /** Sorts traces newest-first, matching the trace viewer panel display order. */

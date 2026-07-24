@@ -8,12 +8,23 @@ import {
   fmtMs,
   durationMs,
   observationTypeColor,
+  computeTreeGuides,
+  computeChildrenByParent,
   computeDepths,
+  resolveDisplayParents,
   buildTraceSummaries,
   sortTracesNewestFirst,
+  type TreeGuideCell,
 } from './trace-utils.js';
 import type { PanelUiState } from './panel-state.js';
 import { performExportContext } from './export-service.js';
+import {
+  escHtml,
+  fmtCost,
+  resolveObservationCost,
+  renderFieldWithToggle,
+  renderSpanDetailMeta,
+} from './span-detail-render.js';
 
 /** Manages a single "Langfuse Trace" webview panel per chat session. */
 export class TraceViewerPanel {
@@ -270,17 +281,6 @@ export class TraceViewerPanel {
   }
 }
 
-function escHtml(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-
-
 function buildWaterfallBar(obs: LangfuseObservation, windowStart: number, windowMs: number): string {
   if (!obs.startTime || windowMs <= 0) {
     return `<div class="wf-bar" style="left:0%;width:100%;background:var(--wf-color)"></div>`;
@@ -292,133 +292,45 @@ function buildWaterfallBar(obs: LangfuseObservation, windowStart: number, window
   return `<div class="wf-bar" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%;background:var(--wf-color)"></div>`;
 }
 
-function renderObsJson(value: unknown): string {
-  if (!isDefined(value)) { return '<em class="dim">—</em>'; }
-  try {
-    const json = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-    return `<pre class="json-block">${escHtml(json)}</pre>`;
-  } catch {
-    return escHtml(String(value));
-  }
+/** Renders folder-style tree guide columns (│ ├ └) for a span row. */
+function renderTreeGuides(cells: TreeGuideCell[]): string {
+  if (cells.length === 0) { return ''; }
+  const cols = cells.map(cell => `<span class="tg tg-${cell}" aria-hidden="true"></span>`).join('');
+  return `<span class="tree-guides">${cols}</span>`;
 }
 
-/** Renders a content part that may be a string, a {text} object, or a nested array. */
-function renderContentPart(part: unknown): string {
-  if (typeof part === 'string') {
-    return `<p class="fmt-text">${escHtml(part)}</p>`;
-  }
-  if (isDefined(part) && typeof part === 'object' && !Array.isArray(part)) {
-    const p = part as Record<string, unknown>;
-    if (typeof p['text'] === 'string') {
-      return `<p class="fmt-text">${escHtml(p['text'])}</p>`;
+/** Renders a compact type icon with the full type label as a tooltip. */
+function renderObsTypeIcon(type: string | undefined, typeColor: string): string {
+  const label = (type ?? 'SPAN').toUpperCase();
+  const svg = (() => {
+    switch (label) {
+      case 'GENERATION':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1.2l1.1 2.6 2.8.3-2.1 1.9.6 2.8L6 7.4 3.6 8.8l.6-2.8-2.1-1.9 2.8-.3L6 1.2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+      case 'EVENT':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="3.2" stroke="currentColor" stroke-width="1.4"/><circle cx="6" cy="6" r="1" fill="currentColor"/></svg>';
+      case 'AGENT':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="4" r="2.1" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 10c.6-2 2-3 3.5-3s2.9 1 3.5 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      case 'TOOL':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M7.8 2.2a2.4 2.4 0 0 0-3.2 3.2L2 8l2 2 2.6-2.6a2.4 2.4 0 0 0 3.2-3.2L8.2 5.2 7.8 2.2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+      case 'CHAIN':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M5 7.2a2.4 2.4 0 0 1 0-3.4l1.2-1.2a2.4 2.4 0 1 1 3.4 3.4L8.8 6.8M7 4.8a2.4 2.4 0 0 1 0 3.4L5.8 9.4a2.4 2.4 0 1 1-3.4-3.4L3.2 5.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+      case 'RETRIEVER':
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="5.2" cy="5.2" r="3.1" stroke="currentColor" stroke-width="1.3"/><path d="M7.5 7.5L10.2 10.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+      case 'SPAN':
+      default:
+        return '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2" y="3.2" width="8" height="5.6" rx="1.2" stroke="currentColor" stroke-width="1.3"/></svg>';
     }
-  }
-  try {
-    return `<pre class="json-block fmt-nested">${escHtml(JSON.stringify(part, null, 2))}</pre>`;
-  } catch {
-    return escHtml(String(part));
-  }
+  })();
+
+  return `<span class="obs-type-icon tip" data-tip="${escHtml(label)}" aria-label="${escHtml(label)}" style="color:${typeColor};background:color-mix(in srgb,${typeColor} 16%,transparent)">${svg}</span>`;
 }
 
-/** Renders message content which may be a string, an array of parts, or other objects. */
-function renderMessageContent(content: unknown): string {
-  if (typeof content === 'string') {
-    return `<p class="fmt-text">${escHtml(content)}</p>`;
+/** Renders the tree expand/collapse control, or a spacer when the span has no children. */
+function renderTreeToggle(hasChildren: boolean): string {
+  if (!hasChildren) {
+    return '<span class="obs-tree-toggle-spacer" aria-hidden="true"></span>';
   }
-  if (Array.isArray(content)) {
-    return (content as unknown[]).map(renderContentPart).join('');
-  }
-  return renderContentPart(content);
-}
-
-/** Returns true when an array looks like a chat messages/contents list. */
-function isChatMessages(arr: unknown[]): boolean {
-  return arr.length > 0 && arr.every(item => {
-    if (!isDefined(item) || typeof item !== 'object' || Array.isArray(item)) { return false; }
-    const o = item as Record<string, unknown>;
-    return 'role' in o || 'content' in o || 'parts' in o;
-  });
-}
-
-/**
- * Recursively renders a value in a human-friendly way.
- * Chat message arrays become role-labeled bubbles; objects become key-value
- * tables; primitives are shown inline.
- */
-function renderFormatted(value: unknown, depth = 0): string {
-  if (!isDefined(value)) { return '<em class="dim">null</em>'; }
-
-  if (typeof value === 'string') {
-    return value.length === 0
-      ? '<em class="dim">(empty)</em>'
-      : `<p class="fmt-text">${escHtml(value)}</p>`;
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return `<span class="fmt-primitive">${escHtml(String(value))}</span>`;
-  }
-
-  if (Array.isArray(value)) {
-    if (isChatMessages(value)) {
-      return value.map(item => {
-        const msg = item as Record<string, unknown>;
-        const role = String(msg['role'] ?? '?');
-        const content = msg['content'] ?? msg['parts'] ?? '';
-        const safeRole = role.replace(/[^a-z0-9]/gi, '');
-        return `<div class="fmt-msg fmt-msg-${escHtml(safeRole)}">
-          <span class="fmt-msg-role">${escHtml(role)}</span>
-          <div class="fmt-msg-body">${renderMessageContent(content)}</div>
-        </div>`;
-      }).join('');
-    }
-    if (value.length === 0) { return '<em class="dim">(empty list)</em>'; }
-    return `<div class="fmt-list">${(value as unknown[]).map((item, i) =>
-      `<div class="fmt-list-item"><span class="fmt-list-idx">[${i}]</span><div class="fmt-list-val">${renderFormatted(item, depth + 1)}</div></div>`
-    ).join('')}</div>`;
-  }
-
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const entries = Object.entries(obj);
-    if (entries.length === 0) { return '<em class="dim">{ }</em>'; }
-
-    const chatKey = entries.find(([k]) => k === 'messages' || k === 'contents' || k === 'parts');
-    if (chatKey && Array.isArray(chatKey[1]) && isChatMessages(chatKey[1])) {
-      const rest = entries.filter(([k]) => k !== chatKey[0]);
-      const header = rest.map(([k, v]) => `<span class="fmt-meta-kv"><span class="fmt-key">${escHtml(k)}</span>: <span class="fmt-primitive">${escHtml(String(v))}</span></span>`).join(' ');
-      return (header ? `<div class="fmt-meta-row">${header}</div>` : '') + renderFormatted(chatKey[1], depth);
-    }
-
-    if (depth >= 2) {
-      try { return `<pre class="json-block fmt-nested">${escHtml(JSON.stringify(value, null, 2))}</pre>`; } catch { /**/ }
-    }
-
-    return `<div class="fmt-kv-table">${entries.map(([k, v]) => {
-      const isLong = typeof v === 'string' && v.length > 80;
-      const valHtml = isLong || typeof v === 'object' || Array.isArray(v)
-        ? `<div class="fmt-val-block">${renderFormatted(v, depth + 1)}</div>`
-        : `<span class="fmt-val-inline">${renderFormatted(v, depth + 1)}</span>`;
-      return `<div class="fmt-kv-row"><span class="fmt-key">${escHtml(k)}</span>${valHtml}</div>`;
-    }).join('')}</div>`;
-  }
-
-  return escHtml(String(value));
-}
-
-/**
- * Wraps a field's value in a JSON/Formatted toggle.  The `fieldId` must be
- * unique within the page (used as a DOM id prefix).
- */
-function renderFieldWithToggle(value: unknown, fieldId: string): string {
-  const jsonHtml = renderObsJson(value);
-  const fmtHtml = renderFormatted(value);
-  return `
-    <div class="field-tabs" data-field="${escHtml(fieldId)}">
-      <button class="field-tab active" data-view="json">JSON</button>
-      <button class="field-tab" data-view="fmt">Formatted</button>
-    </div>
-    <div class="field-view" id="${escHtml(fieldId)}-json">${jsonHtml}</div>
-    <div class="field-view" id="${escHtml(fieldId)}-fmt" style="display:none">${fmtHtml}</div>`;
+  return `<button class="obs-tree-toggle" type="button" title="Collapse children" aria-expanded="true" aria-label="Collapse children"><span class="obs-tree-chevron">▼</span></button>`;
 }
 
 function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: LangfuseObservation[], langfuseHost = ''): string {
@@ -432,10 +344,17 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   const traceSectionsHtml = summaries.map((s, ti) => {
     const { trace, observations: traceObs, minStart, totalMs, tokenInput, tokenOutput } = s;
     const windowMs = totalMs || 1;
+    const treeGuides = computeTreeGuides(traceObs);
+    const childrenByParent = computeChildrenByParent(traceObs);
+    const displayParents = resolveDisplayParents(traceObs);
     const depths = computeDepths(traceObs);
 
     const obsRowsHtml = traceObs.map((obs, oi) => {
-      const indent = (depths.get(obs.id) ?? 0) * 16;
+      const guideCells = treeGuides.get(obs.id) ?? [];
+      const childIds = childrenByParent.get(obs.id) ?? [];
+      const hasChildren = childIds.length > 0;
+      const parentId = displayParents.get(obs.id) ?? '';
+      const depth = depths.get(obs.id) ?? 0;
       const dur = durationMs(obs);
       const typeColor = observationTypeColor(obs.type);
       const obsId = `obs-${ti}-${oi}`;
@@ -444,12 +363,19 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       const usageInfo = obs.usage
         ? `<span class="obs-usage">↑${obs.usage.input ?? '?'} ↓${obs.usage.output ?? '?'} tk</span>`
         : '';
+      const costLabel = fmtCost(resolveObservationCost(obs));
+      const costInfo = costLabel ? `<span class="obs-cost-badge">${escHtml(costLabel)}</span>` : '';
+      const level = obs.level ? String(obs.level).toUpperCase() : '';
+      const levelInfo = level && level !== 'DEFAULT'
+        ? `<span class="obs-level obs-level-${escHtml(level.toLowerCase())}">${escHtml(level)}</span>`
+        : '';
 
       const hasDetail = isDefined(obs.input) || isDefined(obs.output) || isDefined(obs.metadata)
         || isDefined(obs.modelParameters) || !!obs.statusMessage;
       const fldPfx = `fld-${ti}-${oi}`;
       const detailHtml = `
         <div class="obs-detail" id="${detailId}">
+          ${renderSpanDetailMeta(obs)}
           ${isDefined(obs.input) ? `<div class="detail-section"><div class="detail-label">Input</div>${renderFieldWithToggle(obs.input, `${fldPfx}-input`)}</div>` : ''}
           ${isDefined(obs.output) ? `<div class="detail-section"><div class="detail-label">Output</div>${renderFieldWithToggle(obs.output, `${fldPfx}-output`)}</div>` : ''}
           ${isDefined(obs.metadata) ? `<div class="detail-section"><div class="detail-label">Metadata</div>${renderFieldWithToggle(obs.metadata, `${fldPfx}-metadata`)}</div>` : ''}
@@ -459,12 +385,16 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         </div>`;
 
       return `
-        <div class="obs-row" style="--wf-color:${typeColor}" id="${obsId}" data-trace-id="${escHtml(trace.id)}" data-observation-id="${escHtml(obs.id)}">
-          <div class="obs-header" style="padding-left:${20 + indent}px" data-detail="${detailId}" data-row="${obsId}">
-            <span class="obs-type-badge" style="background:color-mix(in srgb,${typeColor} 18%,transparent);color:${typeColor}">${escHtml(obs.type ?? 'SPAN')}</span>
+        <div class="obs-row${hasChildren ? ' has-children' : ''}" style="--wf-color:${typeColor}" id="${obsId}" data-trace-id="${escHtml(trace.id)}" data-observation-id="${escHtml(obs.id)}" data-parent-id="${escHtml(parentId ?? '')}" data-depth="${depth}">
+          <div class="obs-header" data-detail="${detailId}" data-row="${obsId}">
+            ${renderTreeGuides(guideCells)}
+            ${renderTreeToggle(hasChildren)}
+            ${renderObsTypeIcon(obs.type, typeColor)}
             <span class="obs-name">${escHtml(obs.name ?? obs.id)}</span>
+            ${levelInfo}
             ${modelInfo}
             ${usageInfo}
+            ${costInfo}
             <span class="obs-time">${fmtMs(dur)}</span>
             <div class="wf-track">${buildWaterfallBar(obs, minStart, windowMs)}</div>
             <button class="obs-export-btn" type="button" title="Send span context to chat" data-trace-id="${escHtml(trace.id)}" data-observation-id="${escHtml(obs.id)}">
@@ -478,9 +408,10 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
 
     const traceUrl = langfuseHost ? `${escHtml(langfuseHost.replace(/\/$/, ''))}/trace/${escHtml(trace.id)}` : '';
     const traceTime = fmtDate(trace.timestamp);
-    const totalCostStr = (isDefined(trace.totalCost) && trace.totalCost > 0)
-      ? `<span class="trace-cost">$${trace.totalCost.toFixed(5)}</span>`
-      : '';
+    const totalCostStr = (() => {
+      const label = fmtCost(trace.totalCost);
+      return label ? `<span class="trace-cost">${escHtml(label)}</span>` : '';
+    })();
     const usageStr = (tokenInput + tokenOutput) > 0
       ? `<span class="trace-usage">↑${tokenInput.toLocaleString()} ↓${tokenOutput.toLocaleString()} tk</span>`
       : '';
@@ -766,13 +697,13 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   .trace-io-value {
     flex: 1;
     min-width: 0;
-    font-size: 0.88em;
+    font-size: 1em;
   }
-  .trace-io-value .field-tabs { margin-bottom: 4px; }
-  .trace-io-value .fmt-text {
+  .trace-io-value .field-tabs { margin-bottom: 0; }
+  .trace-io-value .fmt-text, .trace-io-value .fmt-md {
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 120px;
+    max-height: 160px;
     overflow-y: auto;
   }
   .trace-io-value .json-block { max-height: 120px; }
@@ -782,25 +713,133 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.04));
   }
   .obs-row.expanded > .obs-header { background: color-mix(in srgb, var(--wf-color) 8%, transparent); }
+  .obs-row.tree-hidden { display: none; }
   .obs-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 7px 16px 7px 20px;
+    gap: 6px;
+    padding: 7px 16px 7px 12px;
     cursor: pointer;
     user-select: none;
     flex-wrap: nowrap;
     min-width: 0;
   }
   .obs-header:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04)); }
-  .obs-type-badge {
-    font-size: 0.68em;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    padding: 2px 6px;
-    border-radius: 8px;
+  .tree-guides {
+    display: flex;
+    align-self: stretch;
     flex-shrink: 0;
+    margin-right: -2px;
+  }
+  .tg {
+    position: relative;
+    width: 14px;
+    flex-shrink: 0;
+    align-self: stretch;
+  }
+  .tg::before,
+  .tg::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    background: var(--vscode-tree-indentGuidesStroke, var(--vscode-editorWidget-border, rgba(255,255,255,0.22)));
+  }
+  .tg-pipe::before {
+    left: 6px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+  }
+  .tg-branch::before {
+    left: 6px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+  }
+  .tg-branch::after {
+    left: 6px;
+    top: 50%;
+    width: 8px;
+    height: 1px;
+  }
+  .tg-last::before {
+    left: 6px;
+    top: 0;
+    height: 50%;
+    width: 1px;
+  }
+  .tg-last::after {
+    left: 6px;
+    top: 50%;
+    width: 8px;
+    height: 1px;
+  }
+  .obs-tree-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .obs-tree-toggle:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.08));
+    color: var(--vscode-foreground);
+  }
+  .obs-tree-chevron {
+    display: inline-block;
+    font-size: 0.62em;
+    transform: rotate(0deg);
+    transition: transform 0.12s ease;
+  }
+  .obs-row.tree-collapsed .obs-tree-chevron { transform: rotate(-90deg); }
+  .obs-tree-toggle-spacer {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+  .obs-type-icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .obs-type-icon svg { display: block; }
+  .obs-type-icon.tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%) translateY(2px);
+    padding: 3px 7px;
+    border-radius: 4px;
+    background: var(--vscode-editorWidget-background, #252526);
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.12));
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    font-size: 0.72em;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
+    transition: opacity 0.06s ease 0.08s, transform 0.06s ease 0.08s;
+  }
+  .obs-type-icon.tip:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
   .obs-name {
     font-size: 0.9em;
@@ -823,6 +862,34 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     color: var(--vscode-terminal-ansiCyan);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+  .obs-cost-badge {
+    font-size: 0.75em;
+    color: var(--vscode-terminal-ansiYellow, #e5c07b);
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-family: var(--vscode-editor-font-family);
+  }
+  .obs-level {
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .obs-level-error {
+    color: var(--vscode-terminal-ansiRed, #e06c75);
+    background: color-mix(in srgb, var(--vscode-terminal-ansiRed, #e06c75) 16%, transparent);
+  }
+  .obs-level-warning {
+    color: var(--vscode-terminal-ansiYellow, #e5c07b);
+    background: color-mix(in srgb, var(--vscode-terminal-ansiYellow, #e5c07b) 16%, transparent);
+  }
+  .obs-level-debug, .obs-level-default {
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent);
   }
   .obs-time {
     font-size: 0.8em;
@@ -884,6 +951,43 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     letter-spacing: 0.5px;
     color: var(--vscode-descriptionForeground);
   }
+  .obs-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 8px 10px;
+    margin-bottom: 2px;
+    border-radius: 6px;
+    background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.12));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.06));
+  }
+  .obs-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 0.8em;
+  }
+  .obs-meta-k {
+    font-size: 0.85em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--vscode-descriptionForeground);
+  }
+  .obs-meta-v { color: var(--vscode-foreground); }
+  .obs-meta-v.mono, .obs-meta-id {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.92em;
+  }
+  .obs-meta-id {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-foreground);
+  }
+  .obs-cost { color: var(--vscode-terminal-ansiYellow, #e5c07b); font-family: var(--vscode-editor-font-family); }
   .json-block {
     margin: 0;
     padding: 8px 10px;
@@ -901,12 +1005,22 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.08));
   }
   .json-block.fmt-nested { max-height: 200px; font-size: 0.9em; }
+  .json-key { color: var(--vscode-terminal-ansiBlue, #61afef); }
+  .json-str { color: var(--vscode-terminal-ansiGreen, #98c379); }
+  .json-num { color: var(--vscode-terminal-ansiYellow, #e5c07b); }
+  .json-kw { color: var(--vscode-terminal-ansiMagenta, #c678dd); }
 
   /* ── Field JSON/Formatted toggle ── */
+  .field-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
   .field-tabs {
     display: flex;
     gap: 2px;
-    margin-bottom: 4px;
   }
   .field-tab {
     font-size: 0.7em;
@@ -927,24 +1041,65 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     color: var(--vscode-button-background);
     border-color: color-mix(in srgb, var(--vscode-button-background) 50%, transparent);
   }
+  .field-copy-btn {
+    font-size: 0.7em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.15));
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    line-height: 1.6;
+    flex-shrink: 0;
+  }
+  .field-copy-btn:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); color: var(--vscode-foreground); }
+  .field-copy-btn.copied {
+    color: var(--vscode-terminal-ansiGreen, #98c379);
+    border-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #98c379) 45%, transparent);
+  }
 
   /* ── Formatted view ── */
-  .fmt-text {
+  .fmt-text, .fmt-md {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 0.88em;
-    line-height: 1.55;
+    font-size: 1em;
+    line-height: 1.6;
     color: var(--vscode-foreground);
+  }
+  .fmt-inline-code {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.95em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--vscode-textCodeBlock-background, rgba(0,0,0,0.25)) 80%, transparent);
+  }
+  .fmt-code-block {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    border-radius: 5px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.95em;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.2));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.08));
   }
   .fmt-msg {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    padding: 6px 10px;
+    gap: 4px;
+    padding: 8px 12px;
     border-radius: 6px;
     border-left: 3px solid transparent;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.15));
   }
   .fmt-msg-system { border-left-color: var(--vscode-terminal-ansiYellow, #e5c07b); }
@@ -952,47 +1107,93 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   .fmt-msg-assistant, .fmt-msg-model { border-left-color: var(--vscode-terminal-ansiGreen, #98c379); }
   .fmt-msg-tool   { border-left-color: var(--vscode-terminal-ansiMagenta, #c678dd); }
   .fmt-msg-role {
-    font-size: 0.68em;
+    font-size: 0.72em;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--vscode-descriptionForeground);
     margin-bottom: 2px;
   }
-  .fmt-msg-body { font-size: 0.88em; line-height: 1.5; }
-  .fmt-primitive { font-family: var(--vscode-editor-font-family); font-size: 0.85em; }
-  .fmt-kv-table { display: flex; flex-direction: column; gap: 4px; }
+  .fmt-msg-body {
+    font-size: 1em;
+    line-height: 1.6;
+  }
+  .fmt-tool-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .fmt-tool {
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--vscode-terminal-ansiMagenta, #c678dd) 35%, transparent);
+    background: color-mix(in srgb, var(--vscode-terminal-ansiMagenta, #c678dd) 8%, transparent);
+    overflow: hidden;
+  }
+  .fmt-tool-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--vscode-terminal-ansiMagenta, #c678dd) 20%, transparent);
+  }
+  .fmt-tool-badge {
+    font-size: 0.7em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--vscode-terminal-ansiMagenta, #c678dd);
+  }
+  .fmt-tool-name {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.95em;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+  }
+  .fmt-tool-id {
+    margin-left: auto;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.78em;
+    color: var(--vscode-descriptionForeground);
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fmt-tool-args { padding: 8px 10px; }
+  .fmt-tool-args .json-block { max-height: 180px; border: none; background: transparent; padding: 0; }
+  .fmt-primitive {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.95em;
+  }
+  .fmt-kv-table { display: flex; flex-direction: column; gap: 6px; }
   .fmt-kv-row {
     display: flex;
     align-items: baseline;
     gap: 8px;
     flex-wrap: wrap;
-    font-size: 0.85em;
+    font-size: 1em;
+    line-height: 1.5;
   }
   .fmt-key {
     font-family: var(--vscode-editor-font-family);
-    font-size: 0.88em;
+    font-size: 0.95em;
     color: var(--vscode-descriptionForeground);
     white-space: nowrap;
     flex-shrink: 0;
   }
   .fmt-key::after { content: ':'; }
-  .fmt-val-inline { color: var(--vscode-foreground); }
+  .fmt-val-inline { color: var(--vscode-foreground); font-size: 1em; }
   .fmt-val-block { width: 100%; padding-left: 10px; }
   .fmt-meta-row {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
     margin-bottom: 8px;
-    font-size: 0.8em;
+    font-size: 0.9em;
     color: var(--vscode-descriptionForeground);
   }
   .fmt-meta-kv .fmt-key::after { content: ':'; }
-  .fmt-list { display: flex; flex-direction: column; gap: 4px; }
-  .fmt-list-item { display: flex; align-items: baseline; gap: 6px; font-size: 0.85em; }
+  .fmt-list { display: flex; flex-direction: column; gap: 6px; }
+  .fmt-list-item { display: flex; align-items: baseline; gap: 6px; font-size: 1em; }
   .fmt-list-idx {
     font-family: var(--vscode-editor-font-family);
-    font-size: 0.8em;
+    font-size: 0.9em;
     color: var(--vscode-descriptionForeground);
     flex-shrink: 0;
   }
@@ -1085,6 +1286,46 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         lastInteractedObservationId: lastInteractedObservationId,
         lastInteractedTraceId: lastInteractedTraceId,
       });
+    }
+
+    function applyTreeVisibility(scope) {
+      var root = scope || document;
+      var rows = Array.prototype.slice.call(root.querySelectorAll('.obs-row'));
+      var byId = {};
+      rows.forEach(function(row) {
+        var id = row.getAttribute('data-observation-id');
+        if (id) { byId[id] = row; }
+      });
+      rows.forEach(function(row) {
+        var hidden = false;
+        var parentId = row.getAttribute('data-parent-id') || '';
+        var guard = 0;
+        while (parentId && guard < 64) {
+          guard += 1;
+          var parent = byId[parentId];
+          if (!parent) { break; }
+          if (parent.classList.contains('tree-collapsed')) {
+            hidden = true;
+            break;
+          }
+          parentId = parent.getAttribute('data-parent-id') || '';
+        }
+        row.classList.toggle('tree-hidden', hidden);
+      });
+    }
+
+    function setTreeCollapsed(row, collapsed) {
+      if (!row || !row.classList.contains('has-children')) { return; }
+      row.classList.toggle('tree-collapsed', collapsed);
+      var toggle = row.querySelector('.obs-tree-toggle');
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        toggle.title = collapsed ? 'Expand children' : 'Collapse children';
+        toggle.setAttribute('aria-label', collapsed ? 'Expand children' : 'Collapse children');
+      }
+      var section = row;
+      while (section && !section.classList.contains('trace-section')) { section = section.parentElement; }
+      applyTreeVisibility(section || document);
     }
 
     // ── Export span for AI ────────────────────────────────────────────────────
@@ -1192,14 +1433,20 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         if (section) {
           if (!isExpanded) {
             section.querySelectorAll('.obs-detail').forEach(function(d) { d.classList.add('open'); });
-            section.querySelectorAll('.obs-row').forEach(function(r) { r.classList.add('expanded'); });
+            section.querySelectorAll('.obs-row').forEach(function(r) {
+              r.classList.add('expanded');
+              setTreeCollapsed(r, false);
+            });
             var tbody = section.querySelector('.trace-body');
             var tchev = section.querySelector('.trace-chevron');
             if (tbody) { tbody.style.display = ''; }
             if (tchev) { tchev.textContent = '▼'; }
           } else {
             section.querySelectorAll('.obs-detail').forEach(function(d) { d.classList.remove('open'); });
-            section.querySelectorAll('.obs-row').forEach(function(r) { r.classList.remove('expanded'); });
+            section.querySelectorAll('.obs-row').forEach(function(r) {
+              r.classList.remove('expanded');
+              setTreeCollapsed(r, true);
+            });
           }
           btn.setAttribute('data-expanded', isExpanded ? 'false' : 'true');
           btn.querySelector('.icon-expand').style.display  = isExpanded ? '' : 'none';
@@ -1207,6 +1454,24 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
           btn.title = isExpanded ? 'Expand all spans in this trace' : 'Collapse all spans in this trace';
           focusedTraceIndex = section ? parseInt(section.getAttribute('data-trace-index') || '', 10) : null;
           focusedTraceId = section ? section.getAttribute('data-trace-id') : null;
+          reportUiState();
+        }
+        e.stopPropagation();
+        return;
+      }
+
+      // ── Tree collapse / expand for spans with children ───────────────────
+      var treeBtn = target;
+      while (treeBtn && treeBtn !== document.body && !(treeBtn.classList && treeBtn.classList.contains('obs-tree-toggle'))) {
+        treeBtn = treeBtn.parentElement;
+      }
+      if (treeBtn && treeBtn.classList && treeBtn.classList.contains('obs-tree-toggle')) {
+        var treeRow = treeBtn;
+        while (treeRow && !treeRow.classList.contains('obs-row')) { treeRow = treeRow.parentElement; }
+        if (treeRow) {
+          setTreeCollapsed(treeRow, !treeRow.classList.contains('tree-collapsed'));
+          lastInteractedObservationId = treeRow.getAttribute('data-observation-id');
+          lastInteractedTraceId = treeRow.getAttribute('data-trace-id');
           reportUiState();
         }
         e.stopPropagation();
@@ -1227,6 +1492,37 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
         var fmtEl  = document.getElementById(fieldId + '-fmt');
         if (jsonEl) { jsonEl.style.display = view === 'json' ? '' : 'none'; }
         if (fmtEl)  { fmtEl.style.display  = view === 'fmt'  ? '' : 'none'; }
+        e.stopPropagation();
+        return;
+      }
+
+      // ── Copy field / observation ID ───────────────────────────────────────
+      var copyBtn = target;
+      while (copyBtn && copyBtn !== document.body && !(copyBtn.classList && copyBtn.classList.contains('field-copy-btn'))) {
+        copyBtn = copyBtn.parentElement;
+      }
+      if (copyBtn && copyBtn.classList && copyBtn.classList.contains('field-copy-btn')) {
+        var text = copyBtn.getAttribute('data-copy') || '';
+        var copyField = copyBtn.getAttribute('data-copy-field');
+        if (copyField) {
+          var fmtView = document.getElementById(copyField + '-fmt');
+          var jsonView = document.getElementById(copyField + '-json');
+          var activeView = (fmtView && fmtView.style.display !== 'none') ? fmtView : jsonView;
+          text = activeView ? (activeView.innerText || activeView.textContent || '') : '';
+        }
+        if (text) {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+              copyBtn.classList.add('copied');
+              var prev = copyBtn.textContent;
+              copyBtn.textContent = 'Copied';
+              setTimeout(function() {
+                copyBtn.classList.remove('copied');
+                copyBtn.textContent = prev;
+              }, 1200);
+            }).catch(function() {});
+          }
+        }
         e.stopPropagation();
         return;
       }

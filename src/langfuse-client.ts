@@ -63,6 +63,10 @@ export interface LangfuseObservation {
   calculatedInputCost?: number;
   calculatedOutputCost?: number;
   calculatedTotalCost?: number;
+  /** Prefer over deprecated calculatedTotalCost when present. */
+  totalCost?: number;
+  /** Per-metric USD costs; `total` key is the aggregated cost when present. */
+  costDetails?: Record<string, number>;
   latency?: number;
 }
 

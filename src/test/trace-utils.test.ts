@@ -7,6 +7,10 @@ import {
   durationMs,
   observationTypeColor,
   computeDepths,
+  computeTreeGuides,
+  computeChildrenByParent,
+  resolveDisplayParents,
+  computeHiddenByCollapsedParents,
   computeTraceTokens,
   buildTraceSummaries,
 } from '../trace-utils.js';
@@ -184,6 +188,130 @@ describe('computeDepths', () => {
 
   it('returns an empty map for an empty list', () => {
     expect(computeDepths([]).size).toBe(0);
+  });
+});
+
+describe('computeTreeGuides', () => {
+  it('returns empty guides for roots', () => {
+    const obs = [makeObs({ id: 'root' })];
+    expect(computeTreeGuides(obs).get('root')).toEqual([]);
+  });
+
+  it('marks a single child as last', () => {
+    const obs = [
+      makeObs({ id: 'parent' }),
+      makeObs({ id: 'child', parentObservationId: 'parent' }),
+    ];
+    expect(computeTreeGuides(obs).get('child')).toEqual(['last']);
+  });
+
+  it('uses branch then last for siblings', () => {
+    const obs = [
+      makeObs({ id: 'parent' }),
+      makeObs({ id: 'a', parentObservationId: 'parent' }),
+      makeObs({ id: 'b', parentObservationId: 'parent' }),
+    ];
+    const guides = computeTreeGuides(obs);
+    expect(guides.get('a')).toEqual(['branch']);
+    expect(guides.get('b')).toEqual(['last']);
+  });
+
+  it('keeps a continuing pipe under a non-last sibling', () => {
+    const obs = [
+      makeObs({ id: 'root' }),
+      makeObs({ id: 'mid', parentObservationId: 'root' }),
+      makeObs({ id: 'leaf', parentObservationId: 'mid' }),
+      makeObs({ id: 'sib', parentObservationId: 'root' }),
+    ];
+    const guides = computeTreeGuides(obs);
+    expect(guides.get('leaf')).toEqual(['pipe', 'last']);
+    expect(guides.get('sib')).toEqual(['last']);
+  });
+
+  it('uses blank instead of pipe under a last sibling', () => {
+    const obs = [
+      makeObs({ id: 'root' }),
+      makeObs({ id: 'first', parentObservationId: 'root' }),
+      makeObs({ id: 'last', parentObservationId: 'root' }),
+      makeObs({ id: 'nested', parentObservationId: 'last' }),
+    ];
+    expect(computeTreeGuides(obs).get('nested')).toEqual(['blank', 'last']);
+  });
+});
+
+describe('computeChildrenByParent', () => {
+  it('groups children under their parent and roots under null', () => {
+    const obs = [
+      makeObs({ id: 'root' }),
+      makeObs({ id: 'a', parentObservationId: 'root' }),
+      makeObs({ id: 'b', parentObservationId: 'root' }),
+      makeObs({ id: 'leaf', parentObservationId: 'a' }),
+    ];
+    const map = computeChildrenByParent(obs);
+    expect(map.get(null)).toEqual(['root']);
+    expect(map.get('root')).toEqual(['a', 'b']);
+    expect(map.get('a')).toEqual(['leaf']);
+    expect(map.get('b')).toBeUndefined();
+  });
+});
+
+describe('resolveDisplayParents', () => {
+  it('uses parentObservationId when the parent is in the set', () => {
+    const obs = [
+      makeObs({ id: 'root' }),
+      makeObs({ id: 'child', parentObservationId: 'root' }),
+    ];
+    expect(resolveDisplayParents(obs).get('child')).toBe('root');
+  });
+
+  it('does not nest a sibling under a concurrent call_llm by time overlap', () => {
+    const obs = [
+      makeObs({
+        id: 'agent',
+        startTime: '2026-07-24T12:00:00.000Z',
+        endTime: '2026-07-24T12:00:20.000Z',
+      }),
+      makeObs({
+        id: 'call_llm',
+        parentObservationId: 'agent',
+        startTime: '2026-07-24T12:00:01.000Z',
+        endTime: '2026-07-24T12:00:10.000Z',
+      }),
+      makeObs({
+        id: 'generate_content',
+        parentObservationId: 'call_llm',
+        startTime: '2026-07-24T12:00:01.500Z',
+        endTime: '2026-07-24T12:00:09.000Z',
+      }),
+      makeObs({
+        id: 'send_chatbot_message',
+        parentObservationId: 'agent',
+        startTime: '2026-07-24T12:00:08.000Z',
+        endTime: '2026-07-24T12:00:08.500Z',
+      }),
+    ];
+    const parents = resolveDisplayParents(obs);
+    expect(parents.get('generate_content')).toBe('call_llm');
+    expect(parents.get('send_chatbot_message')).toBe('agent');
+  });
+
+  it('hides interleaved children when a call_llm is collapsed', () => {
+    const obs = [
+      makeObs({ id: 'agent' }),
+      makeObs({ id: 'call_llm_1', parentObservationId: 'agent' }),
+      makeObs({ id: 'call_llm_2', parentObservationId: 'agent' }),
+      makeObs({ id: 'gen_1a', parentObservationId: 'call_llm_1' }),
+      makeObs({ id: 'gen_1b', parentObservationId: 'call_llm_1' }),
+      makeObs({ id: 'gen_2', parentObservationId: 'call_llm_2' }),
+      makeObs({ id: 'send_chatbot_message', parentObservationId: 'agent' }),
+    ];
+
+    const hidden = computeHiddenByCollapsedParents(obs, ['call_llm_1']);
+    expect(hidden.has('gen_1a')).toBe(true);
+    expect(hidden.has('gen_1b')).toBe(true);
+    expect(hidden.has('gen_2')).toBe(false);
+    expect(hidden.has('call_llm_2')).toBe(false);
+    expect(hidden.has('send_chatbot_message')).toBe(false);
   });
 });
 

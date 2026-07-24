@@ -3,7 +3,7 @@
   "publisher": "nicolasmota",
   "displayName": "Langfuse Traces",
   "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmota/langfuse-trace-extension.git"
