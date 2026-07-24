@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import type { LangfuseSession, LangfuseTrace } from '../langfuse-client.js';
-import { loadTracesAndObservations, readLangfuseConfig, readRecentSessionsLimit } from '../langfuse-service.js';
+import {
+  loadTracesAndObservations,
+  readLangfuseConfigAsync,
+  readRecentSessionsLimit,
+} from '../langfuse-service.js';
 import { hideSession, rememberSession } from './store.js';
 import { loadRecentLangfuseSessions } from './recent.js';
 import { fmtMs } from '../trace-utils.js';
@@ -66,7 +70,10 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
   readonly onDidChangeTreeData = this._onDidChange.event;
   private _loadPromise?: Promise<LangfuseSession[]>;
 
-  constructor(private readonly _globalState: vscode.Memento) {}
+  constructor(
+    private readonly _globalState: vscode.Memento,
+    private readonly _secrets: vscode.SecretStorage,
+  ) {}
 
   /** Refreshes the sidebar tree and re-fetches sessions from Langfuse. */
   refresh(): void {
@@ -124,18 +131,21 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
 
   private _ensureSessionsLoaded(): Promise<LangfuseSession[]> {
     if (!this._loadPromise) {
-      this._loadPromise = loadRecentLangfuseSessions(
-        this._globalState,
-        readLangfuseConfig(),
-        readRecentSessionsLimit(),
-      );
+      this._loadPromise = (async () => {
+        const config = await readLangfuseConfigAsync(this._secrets);
+        return loadRecentLangfuseSessions(
+          this._globalState,
+          config,
+          readRecentSessionsLimit(),
+        );
+      })();
     }
     return this._loadPromise;
   }
 
   private async _loadTraceChildren(sessionId: string): Promise<TreeNode[]> {
     try {
-      const result = await loadTracesAndObservations(sessionId);
+      const result = await loadTracesAndObservations(sessionId, this._secrets);
       if (!result || result.fullTraces.length === 0) {
         return [new MessageTreeItem('No traces found for this session')];
       }

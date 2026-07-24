@@ -6,6 +6,8 @@ const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
 const MAX_RECENT_SESSIONS_LIMIT = 100;
 
 export const SECRET_KEY_STORAGE_ID = 'langfuse.secretKey';
+export const PUBLIC_KEY_STORAGE_ID = 'langfuse.publicKey';
+export const HOST_STORAGE_ID = 'langfuse.host';
 
 /** Reads how many recent Langfuse sessions to show in the sidebar. */
 export function readRecentSessionsLimit(): number {
@@ -13,6 +15,26 @@ export function readRecentSessionsLimit(): number {
     .get<number>('recentSessionsLimit', DEFAULT_RECENT_SESSIONS_LIMIT);
   if (!Number.isFinite(configured)) { return DEFAULT_RECENT_SESSIONS_LIMIT; }
   return Math.max(1, Math.min(Math.trunc(configured), MAX_RECENT_SESSIONS_LIMIT));
+}
+
+/** Reads Vault CLI settings used by Sync Credentials from Vault. */
+export function readVaultCredentialSettings(): {
+  cli: string;
+  env: string;
+  path: string;
+  publicKeyPath: string;
+  secretKeyPath: string;
+  field: string;
+} {
+  const config = vscode.workspace.getConfiguration('langfuse');
+  return {
+    cli: config.get<string>('vault.cli', '').trim(),
+    env: config.get<string>('vault.env', '').trim(),
+    path: config.get<string>('vault.path', '').trim(),
+    publicKeyPath: config.get<string>('vault.publicKeyPath', '').trim(),
+    secretKeyPath: config.get<string>('vault.secretKeyPath', '').trim(),
+    field: config.get<string>('vault.field', 'value').trim() || 'value',
+  };
 }
 
 /** Reads Langfuse connection settings from VS Code configuration with local defaults. */
@@ -26,17 +48,43 @@ export function readLangfuseConfig(): LangfuseConfig {
 }
 
 /**
- * Reads Langfuse connection settings, preferring a secret key stored in VS Code
- * SecretStorage over the plaintext workspace setting.
+ * Reads Langfuse connection settings, preferring API keys stored in VS Code
+ * SecretStorage over plaintext workspace settings. Host always comes from settings.
  */
 export async function readLangfuseConfigAsync(secrets: vscode.SecretStorage): Promise<LangfuseConfig> {
   const config = vscode.workspace.getConfiguration('langfuse');
-  const storedSecret = await secrets.get(SECRET_KEY_STORAGE_ID);
+  const [storedPublic, storedSecret] = await Promise.all([
+    secrets.get(PUBLIC_KEY_STORAGE_ID),
+    secrets.get(SECRET_KEY_STORAGE_ID),
+  ]);
   return buildLangfuseConfig({
     host: config.get<string>('host'),
-    publicKey: config.get<string>('publicKey'),
+    publicKey: storedPublic ?? config.get<string>('publicKey'),
     secretKey: storedSecret ?? config.get<string>('secretKey'),
   });
+}
+
+/**
+ * Persists Langfuse API keys in SecretStorage (and optionally updates host setting).
+ */
+export async function storeLangfuseCredentials(
+  secrets: vscode.SecretStorage,
+  credentials: LangfuseConfig,
+  options?: { updateHostSetting?: boolean },
+): Promise<void> {
+  await Promise.all([
+    secrets.store(PUBLIC_KEY_STORAGE_ID, credentials.publicKey),
+    secrets.store(SECRET_KEY_STORAGE_ID, credentials.secretKey),
+    // Host belongs in settings; clear any legacy SecretStorage host entry.
+    secrets.delete(HOST_STORAGE_ID),
+  ]);
+  if (options?.updateHostSetting) {
+    await vscode.workspace.getConfiguration('langfuse').update(
+      'host',
+      credentials.host,
+      vscode.ConfigurationTarget.Global,
+    );
+  }
 }
 
 /**

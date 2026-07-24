@@ -3,7 +3,7 @@
   "publisher": "nicolasmota",
   "displayName": "Langfuse Traces",
   "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmota/langfuse-trace-extension.git"
@@ -54,7 +54,7 @@
     "viewsWelcome": [
       {
         "view": "langfuse.sessions",
-        "contents": "Recent Langfuse sessions load automatically.\n[Refresh](command:langfuse.sessions.refresh)\n[Open by ID…](command:langfuse.openTraceById)"
+        "contents": "Recent Langfuse sessions load automatically.\n[Refresh](command:langfuse.sessions.refresh)\n[Sync credentials from Vault](command:langfuse.syncCredentialsFromVault)\n[Open by ID…](command:langfuse.openTraceById)"
       }
     ],
     "commands": [
@@ -109,6 +109,11 @@
         "command": "langfuse.setSecretKey",
         "title": "Set Secret Key (SecretStorage)",
         "category": "Langfuse"
+      },
+      {
+        "command": "langfuse.syncCredentialsFromVault",
+        "title": "Sync Credentials from Vault",
+        "category": "Langfuse"
       }
     ],
     "menus": {
@@ -158,7 +163,37 @@
         "langfuse.secretKey": {
           "type": "string",
           "default": "sk-lf-local-dev",
-          "description": "Langfuse secret key for API authentication."
+          "description": "Langfuse secret key for API authentication. Prefer Sync Credentials from Vault or SecretStorage instead of storing this in settings."
+        },
+        "langfuse.vault.cli": {
+          "type": "string",
+          "default": "",
+          "description": "Executable used for Vault sync (invoked as `<cli> kv get -e <env> <path> --no-prompt`). Leave empty to disable until configured."
+        },
+        "langfuse.vault.env": {
+          "type": "string",
+          "default": "",
+          "description": "Vault environment passed as `-e` when syncing Langfuse credentials."
+        },
+        "langfuse.vault.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional combined Vault KV path with public_key and secret_key (optional host). Prefer publicKeyPath/secretKeyPath when keys are stored separately."
+        },
+        "langfuse.vault.publicKeyPath": {
+          "type": "string",
+          "default": "",
+          "description": "Vault KV path for the Langfuse public key when stored as its own secret."
+        },
+        "langfuse.vault.secretKeyPath": {
+          "type": "string",
+          "default": "",
+          "description": "Vault KV path for the Langfuse secret key when stored as its own secret."
+        },
+        "langfuse.vault.field": {
+          "type": "string",
+          "default": "value",
+          "description": "Field name inside split Vault secrets (default value)."
         },
         "langfuse.recentSessionsLimit": {
           "type": "number",
