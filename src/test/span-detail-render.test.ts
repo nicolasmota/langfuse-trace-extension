@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { LangfuseObservation } from '../langfuse-client.js';
 import {
   escHtml,
+  extractPrimaryText,
   fmtCost,
   highlightJson,
   isChatMessages,
@@ -9,6 +10,7 @@ import {
   isToolCallList,
   renderFieldWithToggle,
   renderFormatted,
+  renderIoSection,
   renderMarkdownLite,
   renderObsJson,
   renderSpanDetailMeta,
@@ -153,6 +155,31 @@ describe('renderFormatted', () => {
     expect(html).toContain('temperature');
     expect(html).toContain('0.2');
   });
+
+  it('renders call_llm payloads without dumping config JSON', () => {
+    const html = renderFormatted({
+      model: 'gemini-2.5-flash',
+      config: {
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        http_options: { timeout: 60, headers: { a: 'b' } },
+        labels: { env: 'prod' },
+      },
+      contents: [
+        { role: 'user', parts: [{ text: 'ola' }] },
+        { role: 'model', parts: [{ text: 'oi' }] },
+      ],
+    });
+    expect(html).toContain('fmt-llm-model');
+    expect(html).toContain('gemini-2.5-flash');
+    expect(html).toContain('fmt-chip');
+    expect(html).toContain('temperature');
+    expect(html).toContain('0.2');
+    expect(html).toContain('fmt-msg-user');
+    expect(html).toContain('ola');
+    expect(html).not.toContain('http_options');
+    expect(html).not.toContain('timeout');
+  });
 });
 
 describe('renderToolCall', () => {
@@ -185,6 +212,32 @@ describe('renderFieldWithToggle', () => {
     expect(html).toContain('id="fld-1-json"');
     expect(html).toContain('data-copy-field="fld-1"');
     expect(html.indexOf('Formatted')).toBeLessThan(html.indexOf('>JSON<'));
+  });
+});
+
+describe('extractPrimaryText / renderIoSection', () => {
+  it('promotes query and keeps scalar meta as chips', () => {
+    const extracted = extractPrimaryText({
+      query: 'manda um oi',
+      user_id: '123',
+      channel: 'whatsapp',
+    });
+    expect(extracted?.primary).toBe('manda um oi');
+    expect(extracted?.meta).toEqual([
+      { key: 'user_id', value: '123' },
+      { key: 'channel', value: 'whatsapp' },
+    ]);
+  });
+
+  it('renders user/assistant turns with prose and role styling', () => {
+    const inputHtml = renderIoSection({ query: 'manda um oi', user_id: '42' }, 'fld-in', 'input');
+    const outputHtml = renderIoSection('Oi! Tudo bem?', 'fld-out', 'output');
+    expect(inputHtml).toContain('io-turn-user');
+    expect(inputHtml).toContain('manda um oi');
+    expect(inputHtml).toContain('fmt-chip');
+    expect(inputHtml).toContain('user_id');
+    expect(outputHtml).toContain('io-turn-assistant');
+    expect(outputHtml).toContain('Oi! Tudo bem?');
   });
 });
 

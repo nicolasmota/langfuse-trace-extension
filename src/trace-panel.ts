@@ -23,6 +23,7 @@ import {
   fmtCost,
   resolveObservationCost,
   renderFieldWithToggle,
+  renderIoSection,
   renderSpanDetailMeta,
 } from './span-detail-render.js';
 
@@ -376,8 +377,8 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
       const detailHtml = `
         <div class="obs-detail" id="${detailId}">
           ${renderSpanDetailMeta(obs)}
-          ${isDefined(obs.input) ? `<div class="detail-section"><div class="detail-label">Input</div>${renderFieldWithToggle(obs.input, `${fldPfx}-input`)}</div>` : ''}
-          ${isDefined(obs.output) ? `<div class="detail-section"><div class="detail-label">Output</div>${renderFieldWithToggle(obs.output, `${fldPfx}-output`)}</div>` : ''}
+          ${isDefined(obs.input) ? renderIoSection(obs.input, `${fldPfx}-input`, 'input') : ''}
+          ${isDefined(obs.output) ? renderIoSection(obs.output, `${fldPfx}-output`, 'output') : ''}
           ${isDefined(obs.metadata) ? `<div class="detail-section"><div class="detail-label">Metadata</div>${renderFieldWithToggle(obs.metadata, `${fldPfx}-metadata`)}</div>` : ''}
           ${isDefined(obs.modelParameters) ? `<div class="detail-section"><div class="detail-label">Model params</div>${renderFieldWithToggle(obs.modelParameters, `${fldPfx}-params`)}</div>` : ''}
           ${obs.statusMessage ? `<div class="detail-section"><div class="detail-label">Status</div><pre class="json-block">${escHtml(obs.statusMessage)}</pre></div>` : ''}
@@ -419,16 +420,8 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     const ioFldPfx = `tio-${ti}`;
     const traceIoHtml = (isDefined(trace.input) || isDefined(trace.output)) ? `
       <div class="trace-io">
-        ${isDefined(trace.input) ? `
-          <div class="trace-io-row">
-            <span class="trace-io-label">User</span>
-            <div class="trace-io-value">${renderFieldWithToggle(trace.input, `${ioFldPfx}-input`)}</div>
-          </div>` : ''}
-        ${isDefined(trace.output) ? `
-          <div class="trace-io-row">
-            <span class="trace-io-label">Assistant</span>
-            <div class="trace-io-value">${renderFieldWithToggle(trace.output, `${ioFldPfx}-output`)}</div>
-          </div>` : ''}
+        ${isDefined(trace.input) ? renderIoSection(trace.input, `${ioFldPfx}-input`, 'user') : ''}
+        ${isDefined(trace.output) ? renderIoSection(trace.output, `${ioFldPfx}-output`, 'assistant') : ''}
       </div>` : '';
 
     return `
@@ -672,41 +665,70 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
   .trace-io {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 10px;
+    padding: 12px 16px 14px;
     border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.08));
     background: color-mix(in srgb, var(--vscode-editor-background) 60%, var(--vscode-editorWidget-background, transparent) 40%);
   }
-  .trace-io-row {
-    display: flex;
-    gap: 10px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.05));
-    align-items: flex-start;
+  .trace-io .io-turn-body .fmt-text,
+  .trace-io .io-turn-body .fmt-md,
+  .trace-io .io-turn-body .io-prose {
+    max-height: 220px;
+    overflow-y: auto;
   }
-  .trace-io-row:last-child { border-bottom: none; }
-  .trace-io-label {
-    font-size: 0.7em;
+  .trace-io .json-block { max-height: 160px; }
+
+  /* ── Conversation turns (User / Assistant / Input / Output) ── */
+  .io-turn {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+    background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.14));
+  }
+  .io-turn-user {
+    border-left: 3px solid var(--vscode-terminal-ansiBlue, #61afef);
+    background: color-mix(in srgb, var(--vscode-terminal-ansiBlue, #61afef) 7%, var(--vscode-textCodeBlock-background, rgba(0,0,0,0.14)));
+  }
+  .io-turn-assistant {
+    border-left: 3px solid var(--vscode-terminal-ansiGreen, #98c379);
+    background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #98c379) 7%, var(--vscode-textCodeBlock-background, rgba(0,0,0,0.14)));
+  }
+  .io-turn-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .io-turn-label {
+    font-size: 0.72em;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--vscode-descriptionForeground);
-    padding-top: 3px;
-    width: 62px;
-    flex-shrink: 0;
   }
-  .trace-io-value {
-    flex: 1;
-    min-width: 0;
+  .io-turn-user .io-turn-label { color: var(--vscode-terminal-ansiBlue, #61afef); }
+  .io-turn-assistant .io-turn-label { color: var(--vscode-terminal-ansiGreen, #98c379); }
+  .io-turn-tools { margin-bottom: 0; }
+  .io-turn-body { min-width: 0; }
+  .io-prose {
     font-size: 1em;
+    line-height: 1.65;
+    color: var(--vscode-foreground);
   }
-  .trace-io-value .field-tabs { margin-bottom: 0; }
-  .trace-io-value .fmt-text, .trace-io-value .fmt-md {
+  .io-prose .fmt-md,
+  .io-prose .fmt-text {
+    font-size: 1em;
+    line-height: 1.65;
+  }
+  .io-prose-user .fmt-md,
+  .io-prose-assistant .fmt-md {
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 160px;
-    overflow-y: auto;
   }
-  .trace-io-value .json-block { max-height: 120px; }
+  .obs-detail > .io-turn { margin-top: 2px; }
 
   /* ── Observation row ── */
   .obs-row {
@@ -1198,6 +1220,46 @@ function buildHtml(sessionId: string, traces: LangfuseTrace[], observations: Lan
     flex-shrink: 0;
   }
   .fmt-list-val { flex: 1; min-width: 0; }
+  .fmt-llm-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .fmt-llm-model {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #98c379) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--vscode-terminal-ansiGreen, #98c379) 30%, transparent);
+  }
+  .fmt-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .fmt-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.78em;
+    background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.18));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+  }
+  .fmt-chip-k {
+    color: var(--vscode-descriptionForeground);
+    font-weight: 600;
+  }
+  .fmt-chip-v {
+    font-family: var(--vscode-editor-font-family);
+    color: var(--vscode-foreground);
+  }
 
   .dim { color: var(--vscode-descriptionForeground); }
   em.dim { font-style: normal; }

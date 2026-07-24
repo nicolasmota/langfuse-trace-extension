@@ -147,6 +147,93 @@ export function isChatMessages(arr: unknown[]): boolean {
   });
 }
 
+/** Returns true when an object looks like an LLM call request wrapper. */
+export function isLlmCallPayload(value: unknown): value is Record<string, unknown> {
+  if (!isDefined(value) || typeof value !== 'object' || Array.isArray(value)) { return false; }
+  const o = value as Record<string, unknown>;
+  const messages = o['messages'] ?? o['contents'];
+  return Array.isArray(messages) && isChatMessages(messages);
+}
+
+const COMPACT_CONFIG_KEYS = new Set([
+  'temperature',
+  'topP',
+  'top_p',
+  'topK',
+  'top_k',
+  'maxOutputTokens',
+  'max_output_tokens',
+  'max_tokens',
+  'maxTokens',
+  'candidateCount',
+  'candidate_count',
+  'frequencyPenalty',
+  'presencePenalty',
+  'stopSequences',
+  'stop_sequences',
+  'responseMimeType',
+  'response_mime_type',
+  'seed',
+]);
+
+const SKIP_CONFIG_KEYS = new Set([
+  'http_options',
+  'httpOptions',
+  'labels',
+  'tools',
+  'toolConfig',
+  'tool_config',
+  'safetySettings',
+  'safety_settings',
+  'systemInstruction',
+  'system_instruction',
+]);
+
+/**
+ * Collects compact scalar config chips from nested generation config objects.
+ * Skips bulky transport/tool blobs that make call_llm payloads unreadable.
+ */
+export function collectConfigChips(config: unknown): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  const seen = new Set<string>();
+
+  function walk(node: unknown): void {
+    if (!isDefined(node) || typeof node !== 'object' || Array.isArray(node)) { return; }
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (SKIP_CONFIG_KEYS.has(key)) { continue; }
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        if (!COMPACT_CONFIG_KEYS.has(key) || seen.has(key)) { continue; }
+        seen.add(key);
+        out.push({ key, value: String(value) });
+        continue;
+      }
+      if (Array.isArray(value) && value.every(v => typeof v === 'string' || typeof v === 'number')) {
+        if (!COMPACT_CONFIG_KEYS.has(key) || seen.has(key) || value.length === 0 || value.length > 6) {
+          continue;
+        }
+        seen.add(key);
+        out.push({ key, value: value.join(', ') });
+        continue;
+      }
+      if (typeof value === 'object' && value !== null) {
+        walk(value);
+      }
+    }
+  }
+
+  walk(config);
+  return out;
+}
+
+/** Renders compact config chips for LLM generation settings. */
+export function renderConfigChips(config: unknown): string {
+  const chips = collectConfigChips(config);
+  if (chips.length === 0) { return ''; }
+  return `<div class="fmt-chips">${chips.map(chip =>
+    `<span class="fmt-chip"><span class="fmt-chip-k">${escHtml(chip.key)}</span><span class="fmt-chip-v">${escHtml(chip.value)}</span></span>`
+  ).join('')}</div>`;
+}
+
 /** Returns true when a value looks like a single tool/function call object. */
 export function isToolCall(value: unknown): value is Record<string, unknown> {
   if (!isDefined(value) || typeof value !== 'object' || Array.isArray(value)) { return false; }
@@ -210,6 +297,28 @@ function renderContentPart(part: unknown): string {
     if (p['type'] === 'tool_use' || p['type'] === 'function_call' || isToolCall(p)) {
       return renderToolCall(p);
     }
+    const functionCall = p['functionCall'] ?? p['function_call'];
+    if (isDefined(functionCall) && typeof functionCall === 'object' && !Array.isArray(functionCall)) {
+      const fc = functionCall as Record<string, unknown>;
+      return renderToolCall({
+        name: fc['name'],
+        arguments: fc['args'] ?? fc['arguments'],
+        id: p['id'] ?? fc['id'],
+      });
+    }
+    const functionResponse = p['functionResponse'] ?? p['function_response'];
+    if (isDefined(functionResponse) && typeof functionResponse === 'object' && !Array.isArray(functionResponse)) {
+      const fr = functionResponse as Record<string, unknown>;
+      const name = String(fr['name'] ?? 'tool');
+      const response = fr['response'] ?? fr['result'] ?? fr;
+      return `<div class="fmt-tool">
+        <div class="fmt-tool-head">
+          <span class="fmt-tool-badge">tool result</span>
+          <span class="fmt-tool-name">${escHtml(name)}</span>
+        </div>
+        <div class="fmt-tool-args">${formatToolArgs(response)}</div>
+      </div>`;
+    }
   }
   try {
     return `<pre class="json-block fmt-nested">${highlightJson(JSON.stringify(part, null, 2))}</pre>`;
@@ -252,6 +361,20 @@ function renderChatMessage(item: Record<string, unknown>): string {
   </div>`;
 }
 
+/** Renders an LLM call wrapper (model + config + contents/messages) without dumping blobs. */
+export function renderLlmCallPayload(obj: Record<string, unknown>): string {
+  const messages = (obj['messages'] ?? obj['contents']) as unknown[];
+  const model = obj['model'] ?? obj['model_name'] ?? obj['modelName'];
+  const config = obj['config'] ?? obj['generationConfig'] ?? obj['generation_config'] ?? obj['modelParameters'];
+
+  const head = model
+    ? `<div class="fmt-llm-head"><span class="fmt-llm-model">${escHtml(String(model))}</span></div>`
+    : '';
+  const chips = renderConfigChips(config);
+  const chat = messages.map(item => renderChatMessage(item as Record<string, unknown>)).join('');
+  return `${head}${chips}${chat}`;
+}
+
 /**
  * Recursively renders a value in a human-friendly way.
  * Chat message arrays become role-labeled bubbles; tool calls become cards;
@@ -286,26 +409,22 @@ export function renderFormatted(value: unknown, depth = 0): string {
       return renderToolCall(value);
     }
 
+    if (isLlmCallPayload(value)) {
+      return renderLlmCallPayload(value);
+    }
+
     const obj = value as Record<string, unknown>;
     const entries = Object.entries(obj);
     if (entries.length === 0) { return '<em class="dim">{ }</em>'; }
 
-    const chatKey = entries.find(([k]) => k === 'messages' || k === 'contents' || k === 'parts');
-    if (chatKey && Array.isArray(chatKey[1]) && isChatMessages(chatKey[1])) {
-      const rest = entries.filter(([k]) => k !== chatKey[0]);
-      const header = rest.map(([k, v]) => {
-        const display = typeof v === 'object' ? JSON.stringify(v) : String(v);
-        return `<span class="fmt-meta-kv"><span class="fmt-key">${escHtml(k)}</span>: <span class="fmt-primitive">${escHtml(display)}</span></span>`;
-      }).join(' ');
-      return (header ? `<div class="fmt-meta-row">${header}</div>` : '') + renderFormatted(chatKey[1], depth);
-    }
-
     const toolCalls = obj['tool_calls'];
     if (Array.isArray(toolCalls) && isToolCallList(toolCalls) && entries.length <= 3) {
       const rest = entries.filter(([k]) => k !== 'tool_calls');
-      const header = rest.map(([k, v]) =>
-        `<span class="fmt-meta-kv"><span class="fmt-key">${escHtml(k)}</span>: <span class="fmt-primitive">${escHtml(String(v))}</span></span>`
-      ).join(' ');
+      const header = rest
+        .filter(([, v]) => typeof v !== 'object' || v === null)
+        .map(([k, v]) =>
+          `<span class="fmt-meta-kv"><span class="fmt-key">${escHtml(k)}</span>: <span class="fmt-primitive">${escHtml(String(v))}</span></span>`
+        ).join(' ');
       return (header ? `<div class="fmt-meta-row">${header}</div>` : '')
         + `<div class="fmt-tool-list">${toolCalls.map(c => renderToolCall(c as Record<string, unknown>)).join('')}</div>`;
     }
@@ -346,6 +465,111 @@ export function renderFieldWithToggle(value: unknown, fieldId: string): string {
     </div>
     <div class="field-view" id="${escHtml(fieldId)}-fmt">${fmtHtml}</div>
     <div class="field-view" id="${escHtml(fieldId)}-json" style="display:none">${jsonHtml}</div>`;
+}
+
+const PRIMARY_TEXT_KEYS = [
+  'query',
+  'message',
+  'text',
+  'prompt',
+  'question',
+  'user_message',
+  'input',
+  'response',
+  'answer',
+  'output',
+  'content',
+  'result',
+];
+
+/**
+ * Pulls a primary human-readable string out of common agent I/O shapes,
+ * leaving scalar leftovers as compact meta chips.
+ */
+export function extractPrimaryText(value: unknown): {
+  primary: string;
+  meta: Array<{ key: string; value: string }>;
+} | null {
+  if (typeof value === 'string') {
+    return value.length === 0 ? null : { primary: value, meta: [] };
+  }
+  if (!isDefined(value) || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const primaryKey = PRIMARY_TEXT_KEYS.find(key => typeof obj[key] === 'string' && String(obj[key]).trim().length > 0);
+  if (!primaryKey) { return null; }
+
+  const meta: Array<{ key: string; value: string }> = [];
+  for (const [key, entry] of Object.entries(obj)) {
+    if (key === primaryKey) { continue; }
+    if (typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
+      const text = String(entry);
+      if (text.length === 0 || text.length > 120) { continue; }
+      meta.push({ key, value: text });
+      if (meta.length >= 10) { break; }
+    }
+  }
+
+  return { primary: String(obj[primaryKey]), meta };
+}
+
+/** Renders the formatted body for a user/assistant I/O turn. */
+export function renderIoBody(value: unknown, role: 'user' | 'assistant'): string {
+  const extracted = extractPrimaryText(value);
+  if (extracted) {
+    const chips = extracted.meta.length === 0
+      ? ''
+      : `<div class="fmt-chips">${extracted.meta.map(chip =>
+        `<span class="fmt-chip"><span class="fmt-chip-k">${escHtml(chip.key)}</span><span class="fmt-chip-v">${escHtml(chip.value)}</span></span>`
+      ).join('')}</div>`;
+    return `${chips}<div class="io-prose io-prose-${role}">${renderMarkdownLite(extracted.primary)}</div>`;
+  }
+  return `<div class="io-prose io-prose-${role}">${renderFormatted(value)}</div>`;
+}
+
+/**
+ * Renders Input/Output or User/Assistant as a conversation turn card
+ * with Formatted/JSON toggle.
+ */
+export function renderIoSection(
+  value: unknown,
+  fieldId: string,
+  kind: 'user' | 'assistant' | 'input' | 'output',
+): string {
+  const role: 'user' | 'assistant' = (kind === 'user' || kind === 'input') ? 'user' : 'assistant';
+  const label = (() => {
+    switch (kind) {
+      case 'user': return 'User';
+      case 'assistant': return 'Assistant';
+      case 'input': return 'Input';
+      case 'output': return 'Output';
+      default: {
+        const _exhaustive: never = kind;
+        return _exhaustive;
+      }
+    }
+  })();
+
+  const jsonHtml = renderObsJson(value);
+  const fmtHtml = renderIoBody(value, role);
+
+  return `
+    <div class="io-turn io-turn-${role}">
+      <div class="io-turn-bar">
+        <span class="io-turn-label">${label}</span>
+        <div class="field-toolbar io-turn-tools">
+          <div class="field-tabs" data-field="${escHtml(fieldId)}">
+            <button class="field-tab active" data-view="fmt" type="button">Formatted</button>
+            <button class="field-tab" data-view="json" type="button">JSON</button>
+          </div>
+          <button class="field-copy-btn" type="button" title="Copy field value" data-copy-field="${escHtml(fieldId)}">Copy</button>
+        </div>
+      </div>
+      <div class="field-view io-turn-body" id="${escHtml(fieldId)}-fmt">${fmtHtml}</div>
+      <div class="field-view io-turn-body" id="${escHtml(fieldId)}-json" style="display:none">${jsonHtml}</div>
+    </div>`;
 }
 
 /** Renders the inspection header shown above span input/output sections. */
