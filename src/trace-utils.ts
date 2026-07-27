@@ -231,6 +231,65 @@ export function computeTreeGuides(obs: LangfuseObservation[]): Map<string, TreeG
   return guides;
 }
 
+/** Compares observations by start time, then by latency descending (matches trace summary tie-break). */
+export function compareObservationsByStartTime(
+  a: LangfuseObservation,
+  b: LangfuseObservation,
+): number {
+  const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
+  const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
+  if (ta !== tb) { return ta - tb; }
+  const da = isDefined(a.latency) ? a.latency : 0;
+  const db = isDefined(b.latency) ? b.latency : 0;
+  return db - da;
+}
+
+/**
+ * Orders observations for display using Langfuse UI tree rules: orphan parents are
+ * promoted to roots, siblings sort by startTime, and the flat list follows pre-order DFS.
+ */
+export function sortObservationsForTraceDisplay(obs: LangfuseObservation[]): LangfuseObservation[] {
+  if (obs.length === 0) { return []; }
+
+  const parents = resolveDisplayParents(obs);
+  const childrenByParent = new Map<string | null, LangfuseObservation[]>();
+
+  for (const o of obs) {
+    const parent = parents.get(o.id) ?? null;
+    const list = childrenByParent.get(parent) ?? [];
+    list.push(o);
+    childrenByParent.set(parent, list);
+  }
+
+  for (const list of childrenByParent.values()) {
+    list.sort(compareObservationsByStartTime);
+  }
+
+  const ordered: LangfuseObservation[] = [];
+  const visited = new Set<string>();
+
+  const visit = (node: LangfuseObservation): void => {
+    if (visited.has(node.id)) { return; }
+    visited.add(node.id);
+    ordered.push(node);
+    for (const child of childrenByParent.get(node.id) ?? []) {
+      visit(child);
+    }
+  };
+
+  for (const root of childrenByParent.get(null) ?? []) {
+    visit(root);
+  }
+
+  const remaining = obs.filter(o => !visited.has(o.id));
+  remaining.sort(compareObservationsByStartTime);
+  for (const o of remaining) {
+    visit(o);
+  }
+
+  return ordered;
+}
+
 /** Sorts traces newest-first, matching the trace viewer panel display order. */
 export function sortTracesNewestFirst(traces: LangfuseTrace[]): LangfuseTrace[] {
   return [...traces].sort((a, b) => {
@@ -243,16 +302,9 @@ export function sortTracesNewestFirst(traces: LangfuseTrace[]): LangfuseTrace[] 
 /** Builds a TraceSummary for each trace, aggregating timing and token usage. */
 export function buildTraceSummaries(traces: LangfuseTrace[], observations: LangfuseObservation[]): TraceSummary[] {
   return traces.map(trace => {
-    const traceObs = observations
-      .filter(o => o.traceId === trace.id)
-      .sort((a, b) => {
-        const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
-        const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
-        if (ta !== tb) { return ta - tb; }
-        const da = isDefined(a.latency) ? a.latency : 0;
-        const db = isDefined(b.latency) ? b.latency : 0;
-        return db - da;
-      });
+    const traceObs = sortObservationsForTraceDisplay(
+      observations.filter(o => o.traceId === trace.id),
+    );
     const starts = traceObs.map(o => o.startTime ? new Date(o.startTime).getTime() : Infinity).filter(isFinite);
     const ends = traceObs.map(o => o.endTime ? new Date(o.endTime).getTime() : -Infinity).filter(n => n !== -Infinity);
     const traceStart = trace.timestamp ? new Date(trace.timestamp).getTime() : (starts.length ? Math.min(...starts) : 0);

@@ -13,6 +13,7 @@ import {
   computeHiddenByCollapsedParents,
   computeTraceTokens,
   buildTraceSummaries,
+  sortObservationsForTraceDisplay,
 } from '../trace-utils.js';
 
 function makeObs(overrides: Partial<LangfuseObservation> = {}): LangfuseObservation {
@@ -360,6 +361,61 @@ describe('computeTraceTokens', () => {
   });
 });
 
+describe('sortObservationsForTraceDisplay', () => {
+  it('orders siblings by startTime at the root level', () => {
+    const obs = [
+      makeObs({ id: 'later', startTime: '2024-01-01T00:00:02.000Z' }),
+      makeObs({ id: 'earlier', startTime: '2024-01-01T00:00:00.000Z' }),
+    ];
+    expect(sortObservationsForTraceDisplay(obs).map(o => o.id)).toEqual(['earlier', 'later']);
+  });
+
+  it('groups children under their parent in pre-order DFS like Langfuse UI', () => {
+    const obs = [
+      makeObs({ id: 'rec', name: 'recommendation_specialist', startTime: '2026-07-27T18:07:22.400Z' }),
+      makeObs({
+        id: 'call-1',
+        name: 'call_llm',
+        parentObservationId: 'rec',
+        startTime: '2026-07-27T18:07:22.426Z',
+      }),
+      makeObs({
+        id: 'sub-agent',
+        name: 'mandatory_filters_extractor',
+        parentObservationId: 'missing-parent',
+        startTime: '2026-07-27T18:07:23.026Z',
+      }),
+      makeObs({
+        id: 'sub-call',
+        name: 'call_llm',
+        parentObservationId: 'sub-agent',
+        startTime: '2026-07-27T18:07:23.033Z',
+      }),
+      makeObs({
+        id: 'call-2',
+        name: 'call_llm',
+        parentObservationId: 'rec',
+        startTime: '2026-07-27T18:07:23.445Z',
+      }),
+      makeObs({
+        id: 'call-3',
+        name: 'call_llm',
+        parentObservationId: 'rec',
+        startTime: '2026-07-27T18:07:24.623Z',
+      }),
+    ];
+
+    expect(sortObservationsForTraceDisplay(obs).map(o => o.id)).toEqual([
+      'rec',
+      'call-1',
+      'call-2',
+      'call-3',
+      'sub-agent',
+      'sub-call',
+    ]);
+  });
+});
+
 describe('buildTraceSummaries', () => {
   it('returns an empty array for an empty trace list', () => {
     expect(buildTraceSummaries([], [])).toEqual([]);
@@ -386,14 +442,35 @@ describe('buildTraceSummaries', () => {
     expect(summary.totalMs).toBe(2000);
   });
 
-  it('sorts observations by startTime ascending', () => {
+  it('orders observations in tree DFS order for display', () => {
     const trace = makeTrace({ id: 'trace-1' });
     const obs = [
-      makeObs({ id: 'later', traceId: 'trace-1', startTime: '2024-01-01T00:00:02.000Z' }),
-      makeObs({ id: 'earlier', traceId: 'trace-1', startTime: '2024-01-01T00:00:00.000Z' }),
+      makeObs({ id: 'parent', traceId: 'trace-1', startTime: '2024-01-01T00:00:00.000Z' }),
+      makeObs({
+        id: 'later-child',
+        traceId: 'trace-1',
+        parentObservationId: 'parent',
+        startTime: '2024-01-01T00:00:02.000Z',
+      }),
+      makeObs({
+        id: 'other-root',
+        traceId: 'trace-1',
+        parentObservationId: 'missing-parent',
+        startTime: '2024-01-01T00:00:01.500Z',
+      }),
+      makeObs({
+        id: 'earlier-child',
+        traceId: 'trace-1',
+        parentObservationId: 'parent',
+        startTime: '2024-01-01T00:00:01.000Z',
+      }),
     ];
     const [summary] = buildTraceSummaries([trace], obs);
-    expect(summary.observations[0].id).toBe('earlier');
-    expect(summary.observations[1].id).toBe('later');
+    expect(summary.observations.map(o => o.id)).toEqual([
+      'parent',
+      'earlier-child',
+      'later-child',
+      'other-root',
+    ]);
   });
 });
