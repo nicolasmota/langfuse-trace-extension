@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LangfuseConfig, buildLangfuseConfig } from './langfuse-client';
 import { loadTracesAndObservationsWithConfig } from './trace-loader';
+import { readVaultCredentialSettingsFromConfig } from './vault-settings';
 
 const DEFAULT_RECENT_SESSIONS_LIMIT = 10;
 const MAX_RECENT_SESSIONS_LIMIT = 100;
@@ -18,23 +19,8 @@ export function readRecentSessionsLimit(): number {
 }
 
 /** Reads Vault CLI settings used by Sync Credentials from Vault. */
-export function readVaultCredentialSettings(): {
-  cli: string;
-  env: string;
-  path: string;
-  publicKeyPath: string;
-  secretKeyPath: string;
-  field: string;
-} {
-  const config = vscode.workspace.getConfiguration('langfuse');
-  return {
-    cli: config.get<string>('vault.cli', '').trim(),
-    env: config.get<string>('vault.env', '').trim(),
-    path: config.get<string>('vault.path', '').trim(),
-    publicKeyPath: config.get<string>('vault.publicKeyPath', '').trim(),
-    secretKeyPath: config.get<string>('vault.secretKeyPath', '').trim(),
-    field: config.get<string>('vault.field', 'value').trim() || 'value',
-  };
+export function readVaultCredentialSettings() {
+  return readVaultCredentialSettingsFromConfig();
 }
 
 /** Reads Langfuse connection settings from VS Code configuration with local defaults. */

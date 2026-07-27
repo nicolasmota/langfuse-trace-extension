@@ -16,6 +16,10 @@ import { LangfuseSessionsProvider, SessionTreeItem } from './session/tree';
 import { rememberSession } from './session/store';
 import { performExportContext } from './export-service';
 import { fetchLangfuseCredentialsFromVault } from './vault-credentials';
+import {
+  configureVaultCredentialSettings,
+  isVaultCredentialSettingsComplete,
+} from './vault-settings';
 
 export function activate(context: vscode.ExtensionContext): void {
   const sessionsProvider = new LangfuseSessionsProvider(context.globalState, context.secrets);
@@ -202,8 +206,18 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       registerCursorMcp(context);
     }),
+    vscode.commands.registerCommand('langfuse.configureVault', async () => {
+      await configureVaultCredentialSettings(readVaultCredentialSettings());
+    }),
     vscode.commands.registerCommand('langfuse.syncCredentialsFromVault', async () => {
-      const vaultSettings = readVaultCredentialSettings();
+      let vaultSettings = readVaultCredentialSettings();
+      if (!isVaultCredentialSettingsComplete(vaultSettings)) {
+        const configured = await configureVaultCredentialSettings(vaultSettings);
+        if (!configured) {
+          return;
+        }
+        vaultSettings = readVaultCredentialSettings();
+      }
       try {
         const fromVault = await vscode.window.withProgress(
           {

@@ -3,7 +3,7 @@
   "publisher": "nicolasmota",
   "displayName": "Langfuse Traces",
   "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmota/langfuse-trace-extension.git"
@@ -54,7 +54,7 @@
     "viewsWelcome": [
       {
         "view": "langfuse.sessions",
-        "contents": "Recent Langfuse sessions load automatically.\n[Refresh](command:langfuse.sessions.refresh)\n[Sync credentials from Vault](command:langfuse.syncCredentialsFromVault)\n[Open by ID…](command:langfuse.openTraceById)"
+        "contents": "Recent Langfuse sessions load automatically.\n[Refresh](command:langfuse.sessions.refresh)\n[Configure Vault…](command:langfuse.configureVault)\n[Sync credentials from Vault](command:langfuse.syncCredentialsFromVault)\n[Open by ID…](command:langfuse.openTraceById)"
       }
     ],
     "commands": [
@@ -108,6 +108,11 @@
       {
         "command": "langfuse.setSecretKey",
         "title": "Set Secret Key (SecretStorage)",
+        "category": "Langfuse"
+      },
+      {
+        "command": "langfuse.configureVault",
+        "title": "Configure Vault…",
         "category": "Langfuse"
       },
       {

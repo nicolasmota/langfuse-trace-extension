@@ -25,6 +25,28 @@ export interface VaultCredentialFetchOptions {
   runVault?: VaultKvRunner;
 }
 
+export interface VaultCredentialSettings {
+  cli: string;
+  env: string;
+  path: string;
+  publicKeyPath: string;
+  secretKeyPath: string;
+  field: string;
+}
+
+/**
+ * Returns true when Vault sync has enough settings to fetch credentials.
+ */
+export function isVaultCredentialSettingsComplete(settings: VaultCredentialSettings): boolean {
+  if (!settings.cli.trim() || !settings.env.trim()) {
+    return false;
+  }
+  if (settings.path.trim()) {
+    return true;
+  }
+  return Boolean(settings.publicKeyPath.trim() && settings.secretKeyPath.trim());
+}
+
 /**
  * Parses Vault CLI KV get stdout (`key:value` lines) into a string map.
  * Values may contain colons; only the first colon splits key from value.
