@@ -51,8 +51,11 @@ The first trace panel opens beside your editor; additional sessions open as tabs
 | `langfuse.host` | `http://127.0.0.1:3000` | Base URL of your Langfuse instance |
 | `langfuse.publicKey` | `pk-lf-local-dev` | Langfuse public API key (overridden by Vault sync / SecretStorage) |
 | `langfuse.secretKey` | `sk-lf-local-dev` | Langfuse secret API key (prefer Vault sync / SecretStorage) |
-| `langfuse.vault.cli` | _(empty)_ | Vault CLI executable (`<cli> kv get -e <env> <path> --no-prompt`) |
-| `langfuse.vault.env` | _(empty)_ | Vault environment for `-e` |
+| `langfuse.vault.cli` | `vault` | Vault CLI executable |
+| `langfuse.vault.mount` | `secret` | KV mount for HashiCorp Vault CLI (or `{mount}` in custom template) |
+| `langfuse.vault.env` | _(empty)_ | Value for `{env}` when using `commandTemplate` |
+| `langfuse.vault.commandTemplate` | _(empty)_ | Optional shell command with `{cli}`, `{env}`, `{mount}`, `{path}` placeholders |
+| `langfuse.vault.outputFormat` | `json` | `json`, `keyvalue`, or `auto` output parsing |
 | `langfuse.vault.path` | _(empty)_ | Optional combined Vault path with `public_key` + `secret_key` |
 | `langfuse.vault.publicKeyPath` | _(empty)_ | Vault path for a split public-key secret |
 | `langfuse.vault.secretKeyPath` | _(empty)_ | Vault path for a split secret-key secret |
@@ -61,12 +64,25 @@ The first trace panel opens beside your editor; additional sessions open as tabs
 
 ### Vault sync (optional)
 
-Configure `langfuse.vault.cli` and `langfuse.vault.env`, plus either:
+**Default (HashiCorp Vault CLI):** set `langfuse.vault.cli`, `langfuse.vault.mount`, and either:
 
-- `langfuse.vault.path` — one secret with `public_key` / `secret_key` (`key:value` lines), or
+- `langfuse.vault.path` — one secret with `public_key` / `secret_key`, or
 - `langfuse.vault.publicKeyPath` + `langfuse.vault.secretKeyPath` — two secrets (field `value` by default)
 
-Then run **Langfuse: Sync Credentials from Vault**.
+**Custom CLI:** set `langfuse.vault.commandTemplate` with placeholders `{cli}`, `{env}`, `{mount}`, `{path}`:
+
+```json
+{
+  "langfuse.vault.cli": "my-secrets-cli",
+  "langfuse.vault.env": "production",
+  "langfuse.vault.commandTemplate": "{cli} secrets get --env {env} {path}",
+  "langfuse.vault.outputFormat": "auto",
+  "langfuse.vault.publicKeyPath": "apps/langfuse/public-key",
+  "langfuse.vault.secretKeyPath": "apps/langfuse/secret-key"
+}
+```
+
+Then run **Langfuse: Sync Credentials from Vault** (or **Configure Vault…** in the sidebar).
 
 ## Requirements
 

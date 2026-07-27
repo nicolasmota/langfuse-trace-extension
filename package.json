@@ -3,7 +3,7 @@
   "publisher": "nicolasmota",
   "displayName": "Langfuse Traces",
   "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
-  "version": "0.3.7",
+  "version": "0.4.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmota/langfuse-trace-extension.git"
@@ -172,13 +172,29 @@
         },
         "langfuse.vault.cli": {
           "type": "string",
-          "default": "",
-          "description": "Executable used for Vault sync (invoked as `<cli> kv get -e <env> <path> --no-prompt`). Leave empty to disable until configured."
+          "default": "vault",
+          "description": "Executable used for Vault sync. Default uses HashiCorp Vault CLI (`vault kv get -mount <mount> -format=json <path>`). Set commandTemplate for custom CLIs."
+        },
+        "langfuse.vault.mount": {
+          "type": "string",
+          "default": "secret",
+          "description": "KV secrets engine mount for HashiCorp Vault CLI, or {mount} placeholder in commandTemplate."
         },
         "langfuse.vault.env": {
           "type": "string",
           "default": "",
-          "description": "Vault environment passed as `-e` when syncing Langfuse credentials."
+          "description": "Optional environment value substituted into {env} when commandTemplate is set."
+        },
+        "langfuse.vault.commandTemplate": {
+          "type": "string",
+          "default": "",
+          "description": "Optional shell command template with {cli}, {env}, {mount}, and {path} placeholders. When empty, uses HashiCorp Vault CLI JSON output."
+        },
+        "langfuse.vault.outputFormat": {
+          "type": "string",
+          "enum": ["auto", "json", "keyvalue"],
+          "default": "json",
+          "description": "How to parse Vault command output. Use auto for custom templates that return either JSON or key:value lines."
         },
         "langfuse.vault.path": {
           "type": "string",
