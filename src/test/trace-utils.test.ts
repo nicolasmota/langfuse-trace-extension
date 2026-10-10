@@ -6,6 +6,10 @@ import {
   fmtDate,
   durationMs,
   observationTypeColor,
+  fmtTokens,
+  isErrorObservation,
+  computeTimeTicks,
+  fmtRelativeTime,
   computeDepths,
   computeTreeGuides,
   computeChildrenByParent,
@@ -472,5 +476,73 @@ describe('buildTraceSummaries', () => {
       'later-child',
       'other-root',
     ]);
+  });
+});
+
+describe('observationTypeColor (extended types)', () => {
+  it('gives agent/tool/chain/retriever their own colors', () => {
+    expect(observationTypeColor('AGENT')).toBe('var(--vscode-terminal-ansiMagenta)');
+    expect(observationTypeColor('tool')).toBe('var(--vscode-terminal-ansiCyan)');
+    expect(observationTypeColor('CHAIN')).not.toBe('var(--vscode-descriptionForeground)');
+    expect(observationTypeColor('RETRIEVER')).not.toBe('var(--vscode-descriptionForeground)');
+  });
+});
+
+describe('fmtTokens', () => {
+  it('formats counts compactly', () => {
+    expect(fmtTokens(0)).toBe('0');
+    expect(fmtTokens(950)).toBe('950');
+    expect(fmtTokens(1234)).toBe('1.2k');
+    expect(fmtTokens(2000)).toBe('2k');
+    expect(fmtTokens(14232)).toBe('14k');
+    expect(fmtTokens(1_250_000)).toBe('1.25M');
+    expect(fmtTokens(NaN)).toBe('—');
+  });
+});
+
+describe('isErrorObservation', () => {
+  it('detects ERROR level', () => {
+    expect(isErrorObservation(makeObs({ level: 'ERROR' }))).toBe(true);
+    expect(isErrorObservation(makeObs({ level: 'error' }))).toBe(true);
+    expect(isErrorObservation(makeObs({ level: 'WARNING' }))).toBe(false);
+    expect(isErrorObservation(makeObs())).toBe(false);
+  });
+});
+
+describe('computeTimeTicks', () => {
+  it('returns [0] for empty windows', () => {
+    expect(computeTimeTicks(0)).toEqual([0]);
+    expect(computeTimeTicks(NaN)).toEqual([0]);
+  });
+
+  it('picks nice steps within the window', () => {
+    expect(computeTimeTicks(486)).toEqual([0, 200, 400]);
+    expect(computeTimeTicks(1000)).toEqual([0, 500, 1000]);
+    const ticks = computeTimeTicks(12_000);
+    expect(ticks[0]).toBe(0);
+    expect(ticks.at(-1)!).toBeLessThanOrEqual(12_000);
+    expect(ticks.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('fmtRelativeTime', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z');
+  it('formats relative times', () => {
+    expect(fmtRelativeTime('2026-10-09T11:59:40Z', now)).toBe('just now');
+    expect(fmtRelativeTime('2026-10-09T11:55:00Z', now)).toBe('5 min ago');
+    expect(fmtRelativeTime('2026-10-09T09:00:00Z', now)).toBe('3 h ago');
+    expect(fmtRelativeTime('2026-10-07T12:00:00Z', now)).toBe('2 d ago');
+    expect(fmtRelativeTime(undefined, now)).toBe('—');
+  });
+});
+
+describe('computeTraceTokens with usageDetails', () => {
+  it('sums generations that only report usageDetails', () => {
+    const trace = { id: 't1' } as LangfuseTrace;
+    const result = computeTraceTokens(trace, [
+      makeObs({ id: 'a', type: 'GENERATION', startTime: '2026-01-01T00:00:00Z', usageDetails: { input: 100, output: 20, total: 120 } }),
+      makeObs({ id: 'b', type: 'GENERATION', startTime: '2026-01-01T00:00:01Z', usageDetails: { input: 50, output: 5, total: 55 } }),
+    ]);
+    expect(result).toEqual({ input: 150, output: 25 });
   });
 });

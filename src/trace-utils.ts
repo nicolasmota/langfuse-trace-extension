@@ -1,4 +1,5 @@
 import type { LangfuseObservation, LangfuseTrace } from './langfuse-client.js';
+import { computeUsageBreakdown } from './usage-breakdown.js';
 
 export interface TraceSummary {
   trace: LangfuseTrace;
@@ -49,8 +50,64 @@ export function observationTypeColor(type?: string): string {
     case 'GENERATION': return 'var(--vscode-terminal-ansiGreen)';
     case 'SPAN': return 'var(--vscode-terminal-ansiBlue)';
     case 'EVENT': return 'var(--vscode-terminal-ansiYellow)';
+    case 'AGENT': return 'var(--vscode-terminal-ansiMagenta)';
+    case 'TOOL': return 'var(--vscode-terminal-ansiCyan)';
+    case 'CHAIN': return 'var(--vscode-terminal-ansiBrightBlue)';
+    case 'RETRIEVER': return 'var(--vscode-terminal-ansiBrightMagenta)';
+    case 'EMBEDDING': return 'var(--vscode-terminal-ansiBrightCyan)';
+    case 'EVALUATOR': return 'var(--vscode-terminal-ansiBrightYellow)';
+    case 'GUARDRAIL': return 'var(--vscode-terminal-ansiBrightGreen)';
     default: return 'var(--vscode-descriptionForeground)';
   }
+}
+
+/** Formats a token count compactly (950, 14.2k, 1.25M). */
+export function fmtTokens(n: number): string {
+  if (!Number.isFinite(n)) { return '—'; }
+  const abs = Math.abs(n);
+  if (abs < 1000) { return String(Math.round(n)); }
+  if (abs < 1_000_000) {
+    const k = n / 1000;
+    return `${k.toFixed(abs < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`;
+  }
+  return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+}
+
+/** True when an observation was recorded with level ERROR. */
+export function isErrorObservation(obs: LangfuseObservation): boolean {
+  return String(obs.level ?? '').toUpperCase() === 'ERROR';
+}
+
+/**
+ * Picks evenly spaced "nice" tick values (1/2/5 × 10ⁿ) for a timeline of `totalMs`.
+ * Always starts at 0; ticks never exceed the window.
+ */
+export function computeTimeTicks(totalMs: number, targetCount = 4): number[] {
+  if (!Number.isFinite(totalMs) || totalMs <= 0) { return [0]; }
+  const rough = totalMs / Math.max(1, targetCount);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 5, 10].map(m => m * magnitude).find(s => s >= rough) ?? 10 * magnitude;
+  const ticks: number[] = [];
+  for (let t = 0; t <= totalMs + 1e-9; t += step) {
+    ticks.push(Number(t.toFixed(6)));
+  }
+  return ticks;
+}
+
+/** Formats an ISO timestamp relative to `now` ("just now", "5 min ago", "3 h ago", "2 d ago"). */
+export function fmtRelativeTime(iso: string | undefined, now: number = Date.now()): string {
+  if (!iso) { return '—'; }
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) { return iso; }
+  const sec = Math.round((now - t) / 1000);
+  if (sec < 45) { return 'just now'; }
+  const min = Math.round(sec / 60);
+  if (min < 60) { return `${min} min ago`; }
+  const hours = Math.round(min / 60);
+  if (hours < 24) { return `${hours} h ago`; }
+  const days = Math.round(hours / 24);
+  if (days < 30) { return `${days} d ago`; }
+  return new Date(t).toLocaleDateString();
 }
 
 /**
@@ -67,16 +124,17 @@ export function computeTraceTokens(
   if (traceCast.usage && ((traceCast.usage.input ?? 0) + (traceCast.usage.output ?? 0)) > 0) {
     return { input: traceCast.usage.input ?? 0, output: traceCast.usage.output ?? 0 };
   }
-  const genObs = traceObs.filter(o => o.type === 'GENERATION' && isDefined(o.usage));
-  const byStart = new Map<string, LangfuseObservation>();
-  for (const o of genObs) {
-    const key = o.startTime ?? o.id;
-    if (!byStart.has(key)) { byStart.set(key, o); }
-  }
+  const seen = new Set<string>();
   let input = 0; let output = 0;
-  for (const o of byStart.values()) {
-    input += o.usage?.input ?? 0;
-    output += o.usage?.output ?? 0;
+  for (const o of traceObs) {
+    if (o.type !== 'GENERATION') { continue; }
+    const key = o.startTime ?? o.id;
+    if (seen.has(key)) { continue; }
+    const usage = computeUsageBreakdown(o);
+    if (!usage) { continue; }
+    seen.add(key);
+    input += usage.input;
+    output += usage.output;
   }
   return { input, output };
 }

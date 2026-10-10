@@ -18,8 +18,12 @@ The first trace panel opens beside your editor; additional sessions open as tabs
 
 ## Features
 
-- **Inline trace panel** — waterfall view with span timings, nesting depth, tokens and costs
-- **Session sidebar** — lists recent Langfuse sessions; pin, refresh, hide, or open with one click
+- **Inline trace panel** — waterfall with a time axis, span nesting, tokens and costs per span; the newest trace opens expanded and older ones collapse to the user message that started them
+- **Filter spans** — search by name, model or type, or narrow to LLM / Tools / Errors; errors are highlighted in the tree and counted in the header
+- **Token usage breakdown** — every generation shows input (cached / uncached), output (reasoning / response), extra categories like cache writes, and cost per category
+- **Keyboard navigation** — `↑` `↓` move, `←` `→` collapse / expand, `Enter` opens details, `/` focuses the filter, `c` sends the focused span to chat
+- **Refresh-safe view** — open spans, collapsed branches, filters and scroll position survive refreshes
+- **Session sidebar** — recent sessions labelled with their opening message, relative time and error badges; pin sessions to keep them on top, refresh, hide, or open with one click
 - **JSON / Formatted toggle** — raw JSON or human-readable chat view for every input and output
 - **Open by session ID** — load a full conversation from the sidebar or Command Palette
 - **Send context to chat** — export span, trace, or session context into Cursor/VS Code chat (MCP pointers for agents)
@@ -35,9 +39,10 @@ The first trace panel opens beside your editor; additional sessions open as tabs
 | `Langfuse: Open Trace Panel` | Focus the active panel or open by session ID |
 | `Langfuse: Open Trace by Session ID…` | Open (or focus) a panel by session ID |
 | `Langfuse: Send Trace Context to Chat` | Send active panel context to chat |
-| `Langfuse: Add Session` | Pin a session ID in the sidebar |
+| `Langfuse: Add Session` | Add a session ID to the sidebar |
 | `Langfuse: Refresh` | Reload recent sessions in the sidebar |
 | `Langfuse: Open Session Traces` | Open traces for a sidebar session |
+| `Langfuse: Pin Session` / `Langfuse: Unpin Session` | Keep a session in the **Pinned** section of the sidebar |
 | `Langfuse: Hide from Sidebar` | Remove a session from the sidebar (does not delete data in Langfuse) |
 | `Langfuse: Send Session to Chat (MCP)` | Send an MCP pointer for a sidebar session to chat |
 | `Langfuse: Register MCP Server` | Re-register the Langfuse MCP server with Cursor |

@@ -71,3 +71,32 @@ export async function hideSession(
     return [...hidden];
   });
 }
+
+const PINNED_KEY = 'langfuse.pinnedSessions';
+
+/** Reads pinned session IDs, most recently pinned first. */
+export function readPinnedSessions(globalState: vscode.Memento): string[] {
+  return globalState.get<string[]>(PINNED_KEY, []);
+}
+
+/** Pins a session so it stays at the top of the sidebar. */
+export async function pinSession(
+  globalState: vscode.Memento,
+  sessionId: string,
+): Promise<string[]> {
+  const trimmed = sessionId.trim();
+  if (!trimmed) { return readPinnedSessions(globalState); }
+  return updateStore<string[]>(globalState, PINNED_KEY, [], current =>
+    [trimmed, ...current.filter(id => id !== trimmed)],
+  );
+}
+
+/** Removes a session from the pinned list. */
+export async function unpinSession(
+  globalState: vscode.Memento,
+  sessionId: string,
+): Promise<string[]> {
+  return updateStore<string[]>(globalState, PINNED_KEY, [], current =>
+    current.filter(id => id !== sessionId),
+  );
+}

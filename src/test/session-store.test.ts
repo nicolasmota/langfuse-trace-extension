@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type * as vscode from 'vscode';
-import { forgetSession, readRecentSessions, rememberSession } from '../session/store.js';
+import {
+  forgetSession,
+  pinSession,
+  readPinnedSessions,
+  readRecentSessions,
+  rememberSession,
+  unpinSession,
+} from '../session/store.js';
 
 function createMemento(): vscode.Memento {
   const store = new Map<string, unknown>();
@@ -37,5 +44,19 @@ describe('session-store', () => {
     await forgetSession(memento, 'session-a');
 
     expect(readRecentSessions(memento).map(s => s.sessionId)).toEqual(['session-b']);
+  });
+
+  it('pins sessions with the latest pin first and ignores duplicates', async () => {
+    await pinSession(memento, 'session-a');
+    await pinSession(memento, 'session-b');
+    await pinSession(memento, 'session-a');
+    expect(readPinnedSessions(memento)).toEqual(['session-a', 'session-b']);
+  });
+
+  it('unpins a session', async () => {
+    await pinSession(memento, 'session-a');
+    await pinSession(memento, 'session-b');
+    await unpinSession(memento, 'session-a');
+    expect(readPinnedSessions(memento)).toEqual(['session-b']);
   });
 });
