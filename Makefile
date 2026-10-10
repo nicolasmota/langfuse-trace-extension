@@ -11,7 +11,7 @@ IDE ?= $(shell command -v cursor >/dev/null 2>&1 && echo cursor || echo code)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup install-deps deps build compile watch test check clean rebuild package install-local uninstall-local dev dev-watch verify doctor
+.PHONY: mock help setup install-deps deps build compile watch test check clean rebuild package install-local uninstall-local dev dev-watch verify doctor
 
 help: ## Show available commands
 	@printf "\nLangfuse Traces — local development\n\n"
@@ -34,6 +34,9 @@ build compile: ## Compile TypeScript to out/
 
 watch: ## Compile in watch mode (foreground)
 	$(NPM) run watch
+
+mock: ## Run a mock Langfuse API with demo sessions on http://127.0.0.1:3000
+	node scripts/mock-langfuse.mjs
 
 test: ## Run the test suite
 	$(NPM) test

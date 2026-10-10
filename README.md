@@ -4,7 +4,19 @@ Inspect LLM traces, spans, token usage and costs from [Langfuse](https://langfus
 
 ## Screenshots
 
+**Session overview** — the newest trace opens expanded with its span tree and waterfall; older traces collapse to the message that started them.
+
 ![Trace panel with waterfall view](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-waterfall.png)
+
+**Debug errors** — filter to failing spans and see the error, input and missing output at a glance.
+
+![Errors filter with an error callout](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-errors.png)
+
+**Token usage** — cached / uncached input, reasoning / response output, and cost per category for every generation.
+
+![Generation detail with token usage breakdown](https://raw.githubusercontent.com/nicolasmota/langfuse-trace-extension/main/images/screenshot-usage.png)
+
+<sub>Screenshots are rendered from demo data (`make mock`) with a dark theme.</sub>
 
 ## Quick start
 
