@@ -1,5 +1,6 @@
 import type { LangfuseObservation, LangfuseScore, LangfuseTrace } from './langfuse-client.js';
 import { isDefined, fmtDate, fmtMs, durationMs } from './trace-utils.js';
+import { computeUsageBreakdown, type UsageBreakdown, type UsagePart } from './usage-breakdown.js';
 
 /** Escapes a value for safe insertion into HTML text/attributes. */
 export function escHtml(s: unknown): string {
@@ -792,8 +793,127 @@ export function renderTraceMetaBar(trace: LangfuseTrace): string {
     </div>`;
 }
 
+/** Timing context used to show a span's offset and share of its trace. */
+export interface SpanMetaContext {
+  /** Epoch ms of the trace window start. */
+  traceStart?: number;
+  /** Length of the trace window in ms. */
+  traceMs?: number;
+  /** True when a Usage section is rendered separately; hides duplicated token/cost items. */
+  usageSection?: boolean;
+}
+
+function fmtTokenCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+function fmtShare(part: number, whole: number): string {
+  if (whole <= 0 || part <= 0) { return '—'; }
+  const pct = (part / whole) * 100;
+  return pct < 1 ? '<1%' : `${Math.round(pct)}%`;
+}
+
+/** One-line token summary for tooltips: "Input 3,156 (cached 2,048) · Output 130 (reasoning 64)". */
+export function summarizeUsage(usage: UsageBreakdown): string {
+  const describe = (name: string, total: number, parts: UsagePart[]): string => {
+    const detail = parts.filter(p => p.key !== 'uncached' && p.key !== 'response')
+      .map(p => `${p.label.toLowerCase()} ${fmtTokenCount(p.tokens)}`).join(', ');
+    return `${name} ${fmtTokenCount(total)}${detail ? ` (${detail})` : ''}`;
+  };
+  const extras = usage.extraParts.map(p => `${p.label.toLowerCase()} ${fmtTokenCount(p.tokens)}`);
+  return [describe('Input', usage.input, usage.inputParts), describe('Output', usage.output, usage.outputParts), ...extras].join(' · ');
+}
+
+/** True when a breakdown has any categories worth a dedicated Usage section. */
+export function hasUsageDetail(usage: UsageBreakdown | undefined): usage is UsageBreakdown {
+  return Boolean(usage && (usage.total > 0));
+}
+
+function usageRow(
+  kind: 'parent' | 'sub',
+  swatch: string,
+  label: string,
+  tokens: number,
+  share: string,
+  cost: number | undefined,
+  hint?: string,
+): string {
+  const costLabel = fmtCost(cost);
+  return `<div class="usage-row usage-row-${kind}">
+    <span class="usage-label"><span class="usage-swatch ${swatch}"></span>${escHtml(label)}${kind === 'sub' ? `<span class="usage-pct">${escHtml(share.split(' ')[0] ?? '')}</span>` : ''}${hint ? `<span class="usage-hint">${escHtml(hint)}</span>` : ''}</span>
+    <span class="usage-tok">${fmtTokenCount(tokens)}</span>
+    <span class="usage-share">${escHtml(share)}</span>
+    <span class="usage-cost">${costLabel ? escHtml(costLabel) : ''}</span>
+  </div>`;
+}
+
+/**
+ * Renders the Usage block for a generation: a proportional bar plus a table of
+ * Input (cached/uncached), Output (reasoning/response) and extra token categories.
+ */
+export function renderUsageSection(obs: LangfuseObservation): string {
+  const usage = computeUsageBreakdown(obs);
+  if (!hasUsageDetail(usage)) { return ''; }
+
+  const segments: Array<{ cls: string; tokens: number; title: string }> = [];
+  const pushParts = (parts: UsagePart[], fallbackCls: string, fallbackTokens: number, label: string): void => {
+    if (parts.length === 0) {
+      if (fallbackTokens > 0) { segments.push({ cls: fallbackCls, tokens: fallbackTokens, title: label }); }
+      return;
+    }
+    for (const part of parts) {
+      if (part.tokens > 0) {
+        segments.push({ cls: `u-${part.key}`, tokens: part.tokens, title: `${part.label} · ${fmtTokenCount(part.tokens)}` });
+      }
+    }
+  };
+  pushParts(usage.inputParts, 'u-input', usage.input, `Input · ${fmtTokenCount(usage.input)}`);
+  pushParts(usage.outputParts, 'u-output', usage.output, `Output · ${fmtTokenCount(usage.output)}`);
+  for (const extra of usage.extraParts) {
+    segments.push({ cls: 'u-extra', tokens: extra.tokens, title: `${extra.label} · ${fmtTokenCount(extra.tokens)}` });
+  }
+
+  const bar = segments.map(seg =>
+    `<span class="usage-seg ${seg.cls}" style="flex:${seg.tokens} 1 0" title="${escHtml(seg.title)}"></span>`
+  ).join('');
+  const barLabel = `${fmtTokenCount(usage.total)} tokens: ${segments.map(seg => seg.title.replace(' · ', ' ')).join(', ')}`;
+
+  const rows: string[] = [];
+  const parentSwatch = (parts: UsagePart[], plain: string): string => {
+    if (parts.length < 2) { return plain; }
+    return plain === 'u-input' ? 'u-input-split' : 'u-output-split';
+  };
+  rows.push(usageRow('parent', parentSwatch(usage.inputParts, 'u-input'), 'Input', usage.input, fmtShare(usage.input, usage.total), usage.inputCost));
+  for (const part of usage.inputParts) {
+    rows.push(usageRow('sub', `u-${part.key}`, part.label, part.tokens, `${fmtShare(part.tokens, usage.input)} of input`, part.cost,
+      part.key === 'cached' ? 'billed at a discount' : undefined));
+  }
+  rows.push(usageRow('parent', parentSwatch(usage.outputParts, 'u-output'), 'Output', usage.output, fmtShare(usage.output, usage.total), usage.outputCost));
+  for (const part of usage.outputParts) {
+    rows.push(usageRow('sub', `u-${part.key}`, part.label, part.tokens, `${fmtShare(part.tokens, usage.output)} of output`, part.cost,
+      part.key === 'reasoning' ? 'not shown in the response' : undefined));
+  }
+  for (const extra of usage.extraParts) {
+    rows.push(usageRow('parent', 'u-extra', extra.label, extra.tokens, fmtShare(extra.tokens, usage.total), extra.cost));
+  }
+
+  const totalCost = fmtCost(resolveObservationCost(obs));
+  return `<section class="usage" aria-label="Token usage">
+    <div class="usage-head">
+      <span class="detail-label">Usage</span>
+      <span class="usage-total">${fmtTokenCount(usage.total)} tokens</span>
+      ${totalCost ? `<span class="usage-total-cost">${escHtml(totalCost)}</span>` : ''}
+    </div>
+    <div class="usage-bar" role="img" aria-label="${escHtml(barLabel)}">${bar}</div>
+    <div class="usage-table">
+      <div class="usage-row usage-row-head"><span>Type</span><span class="usage-tok">Tokens</span><span class="usage-share">Share</span><span class="usage-cost">Cost</span></div>
+      ${rows.join('')}
+    </div>
+  </section>`;
+}
+
 /** Renders the inspection header shown above span input/output sections. */
-export function renderSpanDetailMeta(obs: LangfuseObservation, scores?: LangfuseScore[]): string {
+export function renderSpanDetailMeta(obs: LangfuseObservation, scores?: LangfuseScore[], ctx?: SpanMetaContext): string {
   const dur = durationMs(obs);
   const cost = fmtCost(resolveObservationCost(obs));
   const ttft = resolveTtftMs(obs);
@@ -801,23 +921,24 @@ export function renderSpanDetailMeta(obs: LangfuseObservation, scores?: Langfuse
   const levelClass = level === 'ERROR' || level === 'WARNING' || level === 'DEFAULT' || level === 'DEBUG'
     ? `obs-level-${level.toLowerCase()}`
     : 'obs-level-default';
+  const usage = ctx?.usageSection ? computeUsageBreakdown(obs) : undefined;
 
-  const items: string[] = [
-    `<span class="obs-meta-item">
-      <span class="obs-meta-k">ID</span>
-      <code class="obs-meta-id" title="${escHtml(obs.id)}">${escHtml(obs.id)}</code>
-      <button class="field-copy-btn obs-meta-copy" type="button" title="Copy observation ID" data-copy="${escHtml(obs.id)}">Copy</button>
-    </span>`,
-  ];
+  const items: string[] = [];
 
   if (obs.startTime) {
-    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Start</span><span class="obs-meta-v">${escHtml(fmtDate(obs.startTime))}</span></span>`);
+    const startMs = new Date(obs.startTime).getTime();
+    const offset = isDefined(ctx?.traceStart) && isFinite(startMs) ? Math.max(0, startMs - (ctx?.traceStart ?? 0)) : undefined;
+    const clock = `<span class="obs-meta-sub">${escHtml(fmtDate(obs.startTime))}</span>`;
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Start</span><span class="obs-meta-v">${isDefined(offset) ? `+${escHtml(fmtMs(offset))} ${clock}` : escHtml(fmtDate(obs.startTime))}</span></span>`);
   }
-  if (obs.endTime) {
+  if (obs.endTime && !isDefined(ctx?.traceStart)) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">End</span><span class="obs-meta-v">${escHtml(fmtDate(obs.endTime))}</span></span>`);
   }
   if (isDefined(dur)) {
-    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Duration</span><span class="obs-meta-v">${escHtml(fmtMs(dur))}</span></span>`);
+    const share = isDefined(ctx?.traceMs) && (ctx?.traceMs ?? 0) > 0
+      ? ` <span class="obs-meta-sub">· ${escHtml(fmtShare(dur, ctx?.traceMs ?? 0))} of trace</span>`
+      : '';
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Duration</span><span class="obs-meta-v">${escHtml(fmtMs(dur))}${share}</span></span>`);
   }
   if (isDefined(ttft)) {
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">TTFT</span><span class="obs-meta-v">${escHtml(fmtMs(ttft))}</span></span>`);
@@ -840,14 +961,24 @@ export function renderSpanDetailMeta(obs: LangfuseObservation, scores?: Langfuse
       : obs.promptName;
     items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Prompt</span><span class="obs-meta-v mono">${escHtml(promptLabel)}</span></span>`);
   }
-  if (obs.usage) {
-    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Tokens</span><span class="obs-meta-v">↑${obs.usage.input ?? '?'} ↓${obs.usage.output ?? '?'}</span></span>`);
+  if (usage && usage.output > 0 && isDefined(dur) && dur > 0) {
+    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Throughput</span><span class="obs-meta-v">${escHtml(Math.round(usage.output / (dur / 1000)).toLocaleString('en-US'))} tok/s <span class="obs-meta-sub">· output</span></span></span>`);
   }
-  items.push(renderUsageDetailChips(obs.usageDetails));
-  if (cost) {
-    items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Cost</span><span class="obs-meta-v obs-cost">${escHtml(cost)}</span></span>`);
+  if (!ctx?.usageSection) {
+    if (obs.usage) {
+      items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Tokens</span><span class="obs-meta-v">↑${obs.usage.input ?? '?'} ↓${obs.usage.output ?? '?'}</span></span>`);
+    }
+    items.push(renderUsageDetailChips(obs.usageDetails));
+    if (cost) {
+      items.push(`<span class="obs-meta-item"><span class="obs-meta-k">Cost</span><span class="obs-meta-v obs-cost">${escHtml(cost)}</span></span>`);
+    }
+    items.push(renderCostBreakdown(obs));
   }
-  items.push(renderCostBreakdown(obs));
+  items.push(`<span class="obs-meta-item">
+      <span class="obs-meta-k">ID</span>
+      <code class="obs-meta-id" title="${escHtml(obs.id)}">${escHtml(obs.id)}</code>
+      <button class="field-copy-btn obs-meta-copy" type="button" title="Copy observation ID" data-copy="${escHtml(obs.id)}">Copy</button>
+    </span>`);
 
   const scoreHtml = renderScores(scores, obs.id);
 

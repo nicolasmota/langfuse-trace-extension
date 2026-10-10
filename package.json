@@ -3,7 +3,7 @@
   "publisher": "nicolasmota",
   "displayName": "Langfuse Traces",
   "description": "Inline Langfuse trace viewer for VS Code — inspect LLM spans, token usage and costs without leaving the editor",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmota/langfuse-trace-extension.git"
@@ -96,6 +96,18 @@
         "category": "Langfuse"
       },
       {
+        "command": "langfuse.sessions.pin",
+        "title": "Pin Session",
+        "category": "Langfuse",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "langfuse.sessions.unpin",
+        "title": "Unpin Session",
+        "category": "Langfuse",
+        "icon": "$(pinned)"
+      },
+      {
         "command": "langfuse.sessions.sendToChat",
         "title": "Send Session to Chat (MCP)",
         "category": "Langfuse"
@@ -137,17 +149,27 @@
       "view/item/context": [
         {
           "command": "langfuse.sessions.open",
-          "when": "view == langfuse.sessions && viewItem == langfuseSession",
+          "when": "view == langfuse.sessions && viewItem =~ /^langfuseSession/",
           "group": "inline@1"
         },
         {
-          "command": "langfuse.sessions.remove",
+          "command": "langfuse.sessions.pin",
           "when": "view == langfuse.sessions && viewItem == langfuseSession",
           "group": "inline@2"
         },
         {
+          "command": "langfuse.sessions.unpin",
+          "when": "view == langfuse.sessions && viewItem == langfuseSessionPinned",
+          "group": "inline@2"
+        },
+        {
+          "command": "langfuse.sessions.remove",
+          "when": "view == langfuse.sessions && viewItem =~ /^langfuseSession/",
+          "group": "inline@3"
+        },
+        {
           "command": "langfuse.sessions.sendToChat",
-          "when": "view == langfuse.sessions && viewItem == langfuseSession",
+          "when": "view == langfuse.sessions && viewItem =~ /^langfuseSession/",
           "group": "1_modification@1"
         }
       ]

@@ -20,10 +20,13 @@ import {
   renderScores,
   renderSpanDetailMeta,
   renderToolCall,
+  renderUsageSection,
+  summarizeUsage,
   renderTraceMetaBar,
   resolveObservationCost,
   resolveTtftMs,
 } from '../span-detail-render.js';
+import { computeUsageBreakdown } from '../usage-breakdown.js';
 
 describe('escHtml', () => {
   it('escapes markup characters', () => {
@@ -387,5 +390,58 @@ describe('renderSpanDetailMeta', () => {
     expect(html).toContain('relevance');
     expect(html).not.toContain('global');
     expect(renderCostBreakdown(obs)).toContain('in $0.0001');
+  });
+});
+
+describe('renderUsageSection', () => {
+  const generation: LangfuseObservation = {
+    id: 'g1',
+    traceId: 't1',
+    type: 'GENERATION',
+    usageDetails: { input: 3156, output: 130, total: 3286, cached_tokens: 2048, reasoning_tokens: 64 },
+    costDetails: { input: 0.00032, output: 0.00023, total: 0.00055 },
+  };
+
+  it('renders bar, parent rows and sub rows', () => {
+    const html = renderUsageSection(generation);
+    expect(html).toContain('3,286 tokens');
+    expect(html).toContain('$0.00055');
+    expect(html).toContain('flex:2048 1 0');
+    expect(html).toContain('Cached');
+    expect(html).toContain('65% of input');
+    expect(html).toContain('Reasoning');
+    expect(html).toContain('49% of output');
+    expect(html).toContain('$0.00032');
+  });
+
+  it('renders nothing without token data', () => {
+    expect(renderUsageSection({ id: 'x', traceId: 't' })).toBe('');
+  });
+
+  it('summarizes usage for tooltips', () => {
+    expect(summarizeUsage(computeUsageBreakdown(generation)!))
+      .toBe('Input 3,156 (cached 2,048) · Output 130 (reasoning 64)');
+  });
+});
+
+describe('renderSpanDetailMeta with timing context', () => {
+  const obs: LangfuseObservation = {
+    id: 'o1',
+    traceId: 't1',
+    startTime: '2026-07-24T12:00:00.160Z',
+    latency: 0.18,
+    usage: { input: 10, output: 90 },
+  };
+
+  it('shows start offset, share of trace and throughput', () => {
+    const html = renderSpanDetailMeta(obs, undefined, {
+      traceStart: Date.parse('2026-07-24T12:00:00.000Z'),
+      traceMs: 486,
+      usageSection: true,
+    });
+    expect(html).toContain('+160ms');
+    expect(html).toContain('37% of trace');
+    expect(html).toContain('500 tok/s');
+    expect(html).not.toContain('↑10');
   });
 });

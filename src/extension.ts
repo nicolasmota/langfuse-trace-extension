@@ -82,6 +82,16 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!sessionId) { return; }
       await sessionsProvider.removeSession(sessionId);
     }),
+    vscode.commands.registerCommand('langfuse.sessions.pin', async (item?: SessionTreeItem) => {
+      const sessionId = item?.sessionId ?? await promptForSessionId('Pin Langfuse Session');
+      if (!sessionId) { return; }
+      await sessionsProvider.pin(sessionId);
+    }),
+    vscode.commands.registerCommand('langfuse.sessions.unpin', async (item?: SessionTreeItem) => {
+      const sessionId = item?.sessionId;
+      if (!sessionId) { return; }
+      await sessionsProvider.unpin(sessionId);
+    }),
     vscode.commands.registerCommand('langfuse.sessions.sendToChat', async (item?: SessionTreeItem) => {
       const sessionId = item?.sessionId ?? await promptForSessionId('Send Langfuse Session to Chat');
       if (!sessionId) { return; }
@@ -140,6 +150,7 @@ export function activate(context: vscode.ExtensionContext): void {
             ? (result.fullTraces.length - 1 - traceIndex)
             : 0;
           await rememberSession(context.globalState, sessionId);
+          sessionsProvider.noteSessionTraces(sessionId, result.fullTraces);
           sessionsProvider.refresh();
           TraceViewerPanel.createOrShow(sessionId, result.fullTraces, result.observations, context, refreshFn, langfuseHost);
           TraceViewerPanel.focusAt(sessionId, Math.max(0, focusIdx));

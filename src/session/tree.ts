@@ -5,31 +5,46 @@ import {
   readLangfuseConfigAsync,
   readRecentSessionsLimit,
 } from '../langfuse-service.js';
-import { hideSession, rememberSession } from './store.js';
+import { hideSession, pinSession, readPinnedSessions, rememberSession, unpinSession } from './store.js';
 import { loadRecentLangfuseSessions } from './recent.js';
-import { fmtMs } from '../trace-utils.js';
+import { describeSession, describeTrace } from './describe.js';
+import { summarizeSession, type SessionSummary } from '../trace-insights.js';
 
-type TreeNode = SessionTreeItem | TraceTreeItem | MessageTreeItem;
+type TreeNode = SessionTreeItem | TraceTreeItem | MessageTreeItem | GroupTreeItem;
+
+const ERROR_COLOR = new vscode.ThemeColor('testing.iconFailed');
 
 /** VS Code tree item representing a Langfuse session in the sidebar. */
 export class SessionTreeItem extends vscode.TreeItem {
   constructor(
     readonly sessionId: string,
+    label: string,
     collapsibleState: vscode.TreeItemCollapsibleState,
-    options?: { description?: string; tooltip?: string },
+    options: { description?: string; tooltip?: string; pinned?: boolean; hasErrors?: boolean } = {},
   ) {
-    const label = sessionId.length > 12 ? `${sessionId.slice(0, 8)}…` : sessionId;
     super(label, collapsibleState);
     this.id = `session:${sessionId}`;
-    this.contextValue = 'langfuseSession';
-    this.tooltip = options?.tooltip ?? `Langfuse session: ${sessionId}`;
-    this.description = options?.description;
-    this.iconPath = new vscode.ThemeIcon('debug-alt');
+    this.contextValue = options.pinned ? 'langfuseSessionPinned' : 'langfuseSession';
+    this.tooltip = options.tooltip ?? `Langfuse session: ${sessionId}`;
+    this.description = options.description;
+    this.iconPath = options.hasErrors
+      ? new vscode.ThemeIcon('comment-unresolved', ERROR_COLOR)
+      : new vscode.ThemeIcon(options.pinned ? 'pinned' : 'comment-discussion');
     this.command = {
       command: 'langfuse.sessions.open',
       title: 'Open Session Traces',
       arguments: [this],
     };
+  }
+}
+
+/** Section header ("Pinned" / "Recent") shown when at least one session is pinned. */
+export class GroupTreeItem extends vscode.TreeItem {
+  constructor(readonly group: 'pinned' | 'recent', readonly sessions: SessionTreeItem[]) {
+    super(group === 'pinned' ? 'Pinned' : 'Recent', vscode.TreeItemCollapsibleState.Expanded);
+    this.id = `group:${group}`;
+    this.contextValue = 'langfuseGroup';
+    this.description = String(sessions.length);
   }
 }
 
@@ -40,13 +55,15 @@ export class TraceTreeItem extends vscode.TreeItem {
     readonly trace: LangfuseTrace,
     readonly traceIndex: number,
     label: string,
+    hasErrors: boolean,
   ) {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.id = `trace:${sessionId}:${trace.id}`;
     this.contextValue = 'langfuseTrace';
     this.tooltip = trace.id;
-    this.description = trace.timestamp ? new Date(trace.timestamp).toLocaleString() : undefined;
-    this.iconPath = new vscode.ThemeIcon('git-commit');
+    this.iconPath = hasErrors
+      ? new vscode.ThemeIcon('error', ERROR_COLOR)
+      : new vscode.ThemeIcon('circle-small-filled');
     this.command = {
       command: 'langfuse.openTrace',
       title: 'Open Trace',
@@ -69,6 +86,8 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
   private readonly _onDidChange = new vscode.EventEmitter<TreeNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChange.event;
   private _loadPromise?: Promise<LangfuseSession[]>;
+  /** Summaries of sessions whose traces were loaded this window, used for richer labels. */
+  private readonly _summaries = new Map<string, SessionSummary>();
 
   constructor(
     private readonly _globalState: vscode.Memento,
@@ -87,10 +106,28 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
     this.refresh();
   }
 
-  /** Hides a session from the sidebar list. */
+  /** Hides a session from the sidebar list (and unpins it). */
   async removeSession(sessionId: string): Promise<void> {
+    await unpinSession(this._globalState, sessionId);
     await hideSession(this._globalState, sessionId);
     this.refresh();
+  }
+
+  /** Pins a session to the top of the sidebar. */
+  async pin(sessionId: string): Promise<void> {
+    await pinSession(this._globalState, sessionId);
+    this._onDidChange.fire(undefined);
+  }
+
+  /** Removes a session from the pinned section. */
+  async unpin(sessionId: string): Promise<void> {
+    await unpinSession(this._globalState, sessionId);
+    this._onDidChange.fire(undefined);
+  }
+
+  /** Remembers a session's opening message and error count for its sidebar label. */
+  noteSessionTraces(sessionId: string, traces: LangfuseTrace[]): void {
+    this._summaries.set(sessionId, summarizeSession(traces));
   }
 
   getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -102,6 +139,10 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
       return this._loadRootSessions();
     }
 
+    if (element instanceof GroupTreeItem) {
+      return element.sessions;
+    }
+
     if (element instanceof SessionTreeItem) {
       return this._loadTraceChildren(element.sessionId);
     }
@@ -109,28 +150,47 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
     return [];
   }
 
+  private _buildSessionItem(sessionId: string, session: LangfuseSession | undefined, pinned: boolean): SessionTreeItem {
+    const summary = this._summaries.get(sessionId);
+    const text = describeSession(sessionId, session, summary);
+    return new SessionTreeItem(
+      sessionId,
+      text.label,
+      vscode.TreeItemCollapsibleState.Collapsed,
+      {
+        description: text.description,
+        pinned,
+        hasErrors: text.hasErrors,
+        tooltip: [
+          `Langfuse session: ${sessionId}`,
+          summary?.firstMessage ? `First message: ${summary.firstMessage}` : undefined,
+          session ? `Created: ${new Date(session.createdAt).toLocaleString()}` : undefined,
+          session?.environment ? `Environment: ${session.environment}` : undefined,
+          session?.projectId ? `Project: ${session.projectId}` : undefined,
+          summary ? `${summary.traceCount} trace${summary.traceCount === 1 ? '' : 's'}${summary.errorCount ? `, ${summary.errorCount} with errors` : ''}` : undefined,
+        ].filter(Boolean).join('\n'),
+      },
+    );
+  }
+
   private async _loadRootSessions(): Promise<TreeNode[]> {
     try {
       const sessions = await this._ensureSessionsLoaded();
-      if (sessions.length === 0) {
+      const pinnedIds = readPinnedSessions(this._globalState);
+      const byId = new Map(sessions.map(session => [session.id, session]));
+
+      const pinnedItems = pinnedIds.map(id => this._buildSessionItem(id, byId.get(id), true));
+      const recentItems = sessions
+        .filter(session => !pinnedIds.includes(session.id))
+        .map(session => this._buildSessionItem(session.id, session, false));
+
+      if (pinnedItems.length === 0 && recentItems.length === 0) {
         return [new MessageTreeItem('No recent sessions in Langfuse')];
       }
-      return sessions.map(session => {
-        const env = session.environment ? ` · ${session.environment}` : '';
-        return new SessionTreeItem(
-          session.id,
-          vscode.TreeItemCollapsibleState.Collapsed,
-          {
-            description: `${formatSessionDescription(session.createdAt)}${env}`,
-            tooltip: [
-              `Langfuse session: ${session.id}`,
-              `Created: ${new Date(session.createdAt).toLocaleString()}`,
-              session.environment ? `Environment: ${session.environment}` : undefined,
-              session.projectId ? `Project: ${session.projectId}` : undefined,
-            ].filter(Boolean).join('\n'),
-          },
-        );
-      });
+      if (pinnedItems.length === 0) { return recentItems; }
+      const nodes: TreeNode[] = [new GroupTreeItem('pinned', pinnedItems)];
+      if (recentItems.length > 0) { nodes.push(new GroupTreeItem('recent', recentItems)); }
+      return nodes;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return [new MessageTreeItem(`Could not load sessions: ${message}`)];
@@ -158,6 +218,8 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
         return [new MessageTreeItem('No traces found for this session')];
       }
 
+      this.noteSessionTraces(sessionId, result.fullTraces);
+
       const sorted = [...result.fullTraces].sort((a, b) => {
         const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
         const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -165,19 +227,13 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
       });
 
       return sorted.map((trace, traceIndex) => {
-        const obsCount = (trace.observations ?? []).length;
-        const duration = trace.latency ? fmtMs(trace.latency * 1000) : undefined;
-        const label = trace.name ?? `trace ${traceIndex + 1}`;
-        const tagHint = (trace.tags ?? []).slice(0, 2).join(', ');
-        const suffix = [
-          duration,
-          obsCount > 0 ? `${obsCount} spans` : undefined,
-          trace.userId ? `user:${trace.userId}` : undefined,
-          tagHint || undefined,
-        ].filter(Boolean).join(' · ');
-        const item = new TraceTreeItem(sessionId, trace, traceIndex, suffix ? `${label} (${suffix})` : label);
+        const text = describeTrace(trace, traceIndex);
+        const item = new TraceTreeItem(sessionId, trace, traceIndex, text.label, text.hasErrors);
+        item.description = text.description;
         item.tooltip = [
+          trace.name ? `${trace.name}` : undefined,
           `Trace: ${trace.id}`,
+          trace.timestamp ? `Time: ${new Date(trace.timestamp).toLocaleString()}` : undefined,
           trace.userId ? `User: ${trace.userId}` : undefined,
           trace.environment ? `Env: ${trace.environment}` : undefined,
           trace.release ? `Release: ${trace.release}` : undefined,
@@ -193,10 +249,4 @@ export class LangfuseSessionsProvider implements vscode.TreeDataProvider<TreeNod
       return [new MessageTreeItem(`Error: ${message}`)];
     }
   }
-}
-
-function formatSessionDescription(createdAt: string): string {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) { return createdAt; }
-  return date.toLocaleString();
 }
